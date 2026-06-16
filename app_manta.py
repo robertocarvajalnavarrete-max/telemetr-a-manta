@@ -10,22 +10,20 @@ st.set_page_config(page_title="Telemetría Mantas Calefactoras", layout="wide")
 # ==========================================
 #  CONTROL DE ACCESOS (SISTEMA DE SEGURIDAD)
 # ==========================================
-CONTRASENA_CORRECTA = "Manta2026!"  # <--- CAMBIA TU CONTRASEÑA AQUÍ
+CONTRASENA_CORRECTA = "Manta2026!" 
 
 def verificar_password():
     """Devuelve True si el usuario ingresó la credencial correcta."""
     if "autenticado" not in st.session_state:
         st.session_state.autenticado = False
 
-    # Si ya está autenticado, no mostrar el formulario
     if st.session_state.autenticado:
         return True
 
-    # Pantalla de bloqueo centralizada
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         st.markdown("<br><br>", unsafe_allow_html=True)
-        st.image("https://cdn-icons-png.flaticon.com/512/3064/3064155.png", width=80) # Ícono de candado visual
+        st.image("https://cdn-icons-png.flaticon.com/512/3064/3064155.png", width=80)
         st.title("🔒 Acceso Restringido")
         st.subheader("Proyecto Manta - Panel de Telemetría")
         
@@ -41,7 +39,6 @@ def verificar_password():
                 
     return False
 
-# Ejecutar la verificación antes de cargar cualquier dato o componente de la UI
 if verificar_password():
 
     # ==========================================
@@ -56,7 +53,6 @@ if verificar_password():
 
     supabase = init_connection()
 
-    # Barra lateral con botón de cierre de sesión
     st.sidebar.title("Sesión Activa")
     if st.sidebar.button("Cerrar Sesión"):
         st.session_state.autenticado = False
@@ -84,7 +80,7 @@ if verificar_password():
         except Exception as e:
             st.sidebar.error(f"No se pudo actualizar la nube: {e}")
 
-    @st.cache_data(ttl=0, show_spinner=False)
+    @st.cache_data(ttl=60, show_spinner=False)
     def cargar_datos():
         try:
             respuesta = supabase.table("telemetria_mantas").select("*").order("created_at", desc=True).limit(300).execute()
@@ -96,7 +92,6 @@ if verificar_password():
             st.error(f"Error al traer datos de telemetría: {e}")
             return pd.DataFrame()
 
-    # --- CARGA INICIAL DE NODOS ---
     df_inicial = cargar_datos()
 
     if df_inicial.empty:
@@ -105,9 +100,8 @@ if verificar_password():
         nodos_disponibles = df_inicial['nodo_id'].unique()
         nodo_seleccionado = st.sidebar.selectbox("Seleccionar Nodo a Monitorear:", nodos_disponibles)
         
-        # --- CONTROL DE SETPOINT EN LA BARRA LATERAL ---
         st.sidebar.markdown("---")
-        st.sidebar.subheader("🎛️ Configuración de Banda Térmica")
+        st.sidebar.subheader("Configuración de Banda Térmica")
         
         if "sp_local" not in st.session_state:
             st.session_state.sp_local = obtener_setpoint_nube(nodo_seleccionado)
@@ -123,17 +117,16 @@ if verificar_password():
         if nuevo_sp != st.session_state.sp_local:
             actualizar_setpoint_nube(nodo_seleccionado, nuevo_sp)
             st.session_state.sp_local = nuevo_sp
+            cargar_datos.clear() 
             st.sidebar.success(f"🔄 Nube actualizada: {nuevo_sp} °C")
             st.rerun()
 
-        # --- FRAGMENTO DE REFRESCO AUTOMÁTICO CADA 5 SEGUNDOS ---
-        @st.fragment(run_every=5)
+        @st.fragment(run_every=60)
         def renderizar_datos_dinamicos(nodo):
             df_dinamico = cargar_datos()
             df_filtrado = df_dinamico[df_dinamico['nodo_id'] == nodo].copy()
             
             if not df_filtrado.empty:
-                # Asegurar la conversión limpia a tiempo plano (naive) para evitar desfases con Plotly
                 if df_filtrado['created_at'].dt.tz is not None:
                     df_filtrado['created_at'] = df_filtrado['created_at'].dt.tz_convert('America/Punta_Arenas').dt.tz_localize(None)
                 else:
@@ -149,14 +142,12 @@ if verificar_password():
                 with col3:
                     st.metric(label="Temp. Ambiente", value=f"{ultimas_lecturas['temp_ambiente']} °C")
                 with col4:
-                    st.metric(label="Setpoint Objetivo", value=f"{ultimas_lecturas['setpoint']} °C")
+                    st.metric(label="Setpoint Objetivo", value=f"{st.session_state.sp_local} °C")
 
                 st.markdown("---")
 
-                # --- PROCESAMIENTO CRONOLÓGICO PARA EL GRÁFICO ---
                 df_cronologico = df_filtrado.sort_values('created_at', ascending=True)
                 
-                # Definir la ventana de las últimas 2 horas basándonos en la estampa más reciente registrada
                 ultima_estampa = df_cronologico['created_at'].max()
                 limite_hace_2_horas = ultima_estampa - timedelta(hours=2)
                 df_ventana_grafico = df_cronologico[df_cronologico['created_at'] >= limite_hace_2_horas]
@@ -197,8 +188,7 @@ if verificar_password():
                 else:
                     st.info("Alineando estampas de tiempo...")
 
-                # --- EXPORTACIÓN A EXCEL AUTOMATIZADA ---
-                st.subheader("📊 Gestión y Descarga de Datos")
+                st.subheader("📊 Descarga de Datos")
                 
                 buffer_excel = io.BytesIO()
                 with pd.ExcelWriter(buffer_excel, engine='openpyxl') as writer:
@@ -223,12 +213,25 @@ if verificar_password():
                 )
 
                 st.markdown("---")
+                
+                # --- MODIFICACIÓN DE LA TABLA AJUSTADA ---
                 st.subheader("📋 Registro de Datos Recientes")
-                st.dataframe(df_filtrado[['id', 'created_at', 'nodo_id', 'temp_agua', 'temp_ambiente', 'setpoint']], use_container_width=True)
+                
+                # Conservamos el orden descendente de tu foto original (el más nuevo arriba)
+                df_tabla_visual = df_filtrado.copy()
+                
+                # Invertimos exclusivamente el índice: el número más alto arriba y el 0 abajo del todo
+                df_tabla_visual.index = range(len(df_tabla_visual) - 1, -1, -1)
+                
+                st.dataframe(
+                    df_tabla_visual[['id', 'created_at', 'nodo_id', 'temp_agua', 'temp_ambiente', 'setpoint']], 
+                    use_container_width=True
+                )
 
         renderizar_datos_dinamicos(nodo_seleccionado)
 
     if st.button("🔄"):
         if 'sp_local' in st.session_state:
             del st.session_state.sp_local
+        cargar_datos.clear()
         st.rerun()
