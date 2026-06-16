@@ -219,10 +219,7 @@ if verificar_password():
                         x=df_ventana_grafico['created_at'], y=df_ventana_grafico['temp_ambiente'],
                         mode='lines', name='Temperatura Ambiente', line=dict(color='#2ca02c', width=1.5)
                     ))
-                    fig.add_trace(go.Scatter(
-                        x=df_ventana_grafico['created_at'], y=df_ventana_grafico['duty_cycle'],
-                        mode='lines', name='Esfuerzo Manta (PWM %)', line=dict(color='#9467bd', width=1, dash='dot')
-                    ))
+                   
 
                     fig.update_layout(
                         template="plotly_dark",
