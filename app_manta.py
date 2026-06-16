@@ -228,7 +228,7 @@ if verificar_password():
 
         renderizar_datos_dinamicos(nodo_seleccionado)
 
-    if st.button("🔄 Forzar Sincronización Completa"):
+    if st.button("🔄"):
         if 'sp_local' in st.session_state:
             del st.session_state.sp_local
         st.rerun()
