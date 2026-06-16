@@ -185,7 +185,7 @@ if verificar_password():
                     st.metric(label="Setpoint Objetivo", value=f"{st.session_state.sp_local} °C")
 
                 # --- FILA 2: MÉTRICAS ENERGÉTICAS ---
-                st.subheader("⚡ Eficiencia y Consumo Eléctrico")
+                st.subheader("Eficiencia y Consumo Eléctrico")
                 cole1, cole2, cole3, cole4 = st.columns(4)
                 with cole1:
                     st.metric(label="Salida MOSFET Actual", value=f"{current_pwm} %")
