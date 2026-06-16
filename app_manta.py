@@ -83,7 +83,6 @@ if verificar_password():
     @st.cache_data(ttl=60, show_spinner=False)
     def cargar_datos():
         try:
-            # Aumentado a 1000 para garantizar cubrir la ventana de 2 horas tras el filtro de 1 minuto
             respuesta = supabase.table("telemetria_mantas").select("*").order("created_at", desc=True).limit(1000).execute()
             df = pd.DataFrame(respuesta.data)
             if not df.empty:
@@ -116,11 +115,16 @@ if verificar_password():
             step=0.1
         )
         
+        # --- ACCIÓN DEL SLIDER COMPORTÁNDOSE COMO EL BOTÓN DE RESET ---
         if nuevo_sp != st.session_state.sp_local:
             actualizar_setpoint_nube(nodo_seleccionado, nuevo_sp)
             st.session_state.sp_local = nuevo_sp
+            
+            # Forzamos la limpieza idéntica al botón manual de actualización
             cargar_datos.clear() 
-            st.sidebar.success(f"🔄 Nube actualizada: {nuevo_sp} °C")
+            if 'nodo_actual' in st.session_state:
+                del st.session_state.nodo_actual
+                
             st.rerun()
 
         @st.fragment(run_every=60)
@@ -134,22 +138,18 @@ if verificar_password():
                 else:
                     df_filtrado['created_at'] = df_filtrado['created_at'].dt.tz_localize(None)
 
-                # --- LÓGICA DE MUESTREO INTELIGENTE (1 MINUTO + CAMBIOS INSTANTÁNEOS) ---
+                # --- MUESTREO (1 MINUTO + CAMBIOS INSTANTÁNEOS) ---
                 df_cronologico_base = df_filtrado.sort_values('created_at', ascending=True)
 
-                # 1. Extraer el último dato disponible de cada minuto como comportamiento base
                 df_cronologico_base['minuto_floor'] = df_cronologico_base['created_at'].dt.floor('min')
                 df_1min = df_cronologico_base.drop_duplicates(subset=['minuto_floor'], keep='last')
 
-                # 2. Capturar instantáneamente la fila donde el setpoint cambió respecto a la anterior
                 mask_cambio_sp = df_cronologico_base['setpoint'] != df_cronologico_base['setpoint'].shift(1)
                 df_cambios_sp = df_cronologico_base[mask_cambio_sp]
 
-                # 3. Combinar ambos criterios, remover duplicados por ID y ordenar cronológicamente
                 df_procesado_cronologico = pd.concat([df_1min, df_cambios_sp]).drop_duplicates(subset=['id']).sort_values('created_at', ascending=True)
                 df_procesado_cronologico = df_procesado_cronologico.drop(columns=['minuto_floor'])
 
-                # Extraemos las métricas superiores del último registro absoluto en tiempo real
                 ultimas_lecturas = df_cronologico_base.iloc[-1] 
 
                 col1, col2, col3, col4 = st.columns(4)
@@ -164,12 +164,11 @@ if verificar_password():
 
                 st.markdown("---")
 
-                # El gráfico ahora consume el dataset procesado por minuto + transiciones rápidas
                 ultima_estampa = df_procesado_cronologico['created_at'].max()
                 limite_hace_2_horas = ultima_estampa - timedelta(hours=2)
                 df_ventana_grafico = df_procesado_cronologico[df_procesado_cronologico['created_at'] >= limite_hace_2_horas]
 
-                st.subheader(f"📈 Curva Térmica Histórica (Filtro 1 min + Cambios SP) - {nodo}")
+                st.subheader(f"📈 Curva Térmica Histórica - {nodo}")
                 
                 if not df_ventana_grafico.empty:
                     fig = go.Figure()
@@ -187,14 +186,7 @@ if verificar_password():
                         mode='lines', name='Temperatura Ambiente', line=dict(color='#2ca02c', width=1.5)
                     ))
 
-                    fig.add_hline(
-                        y=st.session_state.sp_local, 
-                        line_width=2, 
-                        line_dash="dot", 
-                        line_color="#e74c3c",
-                        annotation_text="🎯 Setpoint Web Actual (Enviado)",
-                        annotation_position="top left"
-                    )
+                    # LÍNEA ROJA ELIMINADA POR COMPLETO DESDE AQUÍ
 
                     fig.update_layout(
                         template="plotly_dark",
@@ -240,13 +232,8 @@ if verificar_password():
 
                 st.markdown("---")
                 
-                # --- TABLA VISUAL DE DATOS FILTRADOS ---
                 st.subheader("📋 Registro de Datos Recientes")
-                
-                # Invertimos el orden del dataset filtrado para que el más nuevo quede arriba en la tabla
                 df_tabla_visual = df_procesado_cronologico.sort_values('created_at', ascending=False).copy()
-                
-                # Reasignamos el índice manual invertido (el valor más alto arriba, el 0 abajo)
                 df_tabla_visual.index = range(len(df_tabla_visual) - 1, -1, -1)
                 
                 st.dataframe(
