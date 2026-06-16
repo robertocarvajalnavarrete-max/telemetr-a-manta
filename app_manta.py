@@ -61,20 +61,22 @@ if verificar_password():
     st.title("Panel de Monitoreo Centralizado Proyecto Manta")
     st.subheader("Monitoreo térmico en tiempo real para nodos en terreno")
 
-    # --- FUNCIONES DE BASE DE DATOS ---
+    # --- FUNCIONES DE BASE DE DATOS (CORREGIDAS) ---
     def obtener_setpoint_nube(nodo):
         try:
-            res = supabase.table("configuracion_nodos").select("limite_minimo").eq("nodo_id", nodo).execute()
+            # CORRECCIÓN: Se cambió "limite_minimo" por "setpoint_config"
+            res = supabase.table("configuracion_nodos").select("setpoint_config").eq("nodo_id", nodo).execute()
             if res.data:
-                return float(res.data[0]["limite_minimo"])
+                return float(res.data[0]["setpoint_config"])
         except Exception as e:
             st.sidebar.error(f"Error de conexión al obtener setpoint: {e}")
         return 4.5
 
     def actualizar_setpoint_nube(nodo, nuevo_sp):
         try:
+            # CORRECCIÓN: Se cambió "limite_minimo" por "setpoint_config"
             supabase.table("configuracion_nodos").update({
-                "limite_minimo": nuevo_sp, 
+                "setpoint_config": nuevo_sp, 
                 "updated_at": "now()"
             }).eq("nodo_id", nodo).execute()
         except Exception as e:
@@ -116,16 +118,18 @@ if verificar_password():
             step=0.1
         )
         
-        # --- IF DE DETECCIÓN DE CAMBIO (SIMULA EL REFRESH AUTOMÁTICAMENTE) ---
+        # --- DETECCIÓN DE CAMBIO DE SETPOINT ---
         if nuevo_sp != st.session_state.sp_local:
             actualizar_setpoint_nube(nodo_seleccionado, nuevo_sp)
-            st.session_state.sp_local = nuevo_sp  # Forzamos el valor en memoria local inmediatamente
-            cargar_datos.clear()                  # Limpiamos el caché de la telemetría por completo
-            st.rerun()                            # Ejecutamos el refresh nativo por software
+            st.session_state.sp_local = nuevo_sp  
+            cargar_datos.clear()                  
+            st.rerun()                            
 
         @st.fragment(run_every=60)
         def renderizar_datos_dinamicos(nodo):
             df_dinamico = cargar_datos()
+            if df_dinamico.empty:
+                return
             df_filtrado = df_dinamico[df_dinamico['nodo_id'] == nodo].copy()
             
             if not df_filtrado.empty:
@@ -134,35 +138,28 @@ if verificar_password():
                 else:
                     df_filtrado['created_at'] = df_filtrado['created_at'].dt.tz_localize(None)
 
-                # Rellenar nulos en duty_cycle por si existen registros antiguos sin la columna
                 if 'duty_cycle' in df_filtrado.columns:
                     df_filtrado['duty_cycle'] = df_filtrado['duty_cycle'].fillna(0).astype(float)
                 else:
                     df_filtrado['duty_cycle'] = 0.0
 
-                # --- ORDEN CRONOLÓGICO BASE PARA INTEGRACIÓN NUMÉRICA ---
                 df_cronologico_base = df_filtrado.sort_values('created_at', ascending=True).reset_index(drop=True)
 
                 # ==========================================
                 #  ALGORITMO DE CONSUMO ENERGÉTICO (PWM)
                 # ==========================================
-                # Parámetros físicos suministrados: 12V * 1.068A = 12.816 Watts
                 POTENCIA_MANTA_W = 12.0 * 1.068 
-                COSTO_KWH_MAGALLANES = 150.0  # Valor promedio de referencia CLP por kWh
+                COSTO_KWH_MAGALLANES = 150.0  
 
-                # Delta de tiempo en horas entre registros consecutivos
                 df_cronologico_base['dt_horas'] = df_cronologico_base['created_at'].diff().dt.total_seconds() / 3600.0
                 df_cronologico_base['dt_horas'] = df_cronologico_base['dt_horas'].fillna(0.0)
 
-                # Energía consumida en el intervalo (Wh) transformada a kWh
-                # Fórmula: (Watts * Fracción_PWM * Horas) / 1000
                 df_cronologico_base['kwh_intervalo'] = (POTENCIA_MANTA_W * (df_cronologico_base['duty_cycle'] / 100.0) * df_cronologico_base['dt_horas']) / 1000.0
                 
                 consumo_total_kwh = df_cronologico_base['kwh_intervalo'].sum()
                 costo_estimado = consumo_total_kwh * COSTO_KWH_MAGALLANES
                 pwm_promedio = df_cronologico_base['duty_cycle'].mean()
 
-                # --- MUESTREO PARA GRÁFICOS (1 MINUTO + CAMBIOS INSTANTÁNEOS) ---
                 df_cronologico_base['minuto_floor'] = df_cronologico_base['created_at'].dt.floor('min')
                 df_1min = df_cronologico_base.drop_duplicates(subset=['minuto_floor'], keep='last')
 
@@ -187,7 +184,7 @@ if verificar_password():
                 with col4:
                     st.metric(label="Setpoint Objetivo", value=f"{st.session_state.sp_local} °C")
 
-                # --- FILA 2: MÉTRICAS ENERGÉTICAS (NUEVA) ---
+                # --- FILA 2: MÉTRICAS ENERGÉTICAS ---
                 st.subheader("⚡ Eficiencia y Consumo Eléctrico")
                 cole1, cole2, cole3, cole4 = st.columns(4)
                 with cole1:
@@ -210,7 +207,6 @@ if verificar_password():
                 
                 if not df_ventana_grafico.empty:
                     fig = go.Figure()
-                    
                     fig.add_trace(go.Scatter(
                         x=df_ventana_grafico['created_at'], y=df_ventana_grafico['setpoint'],
                         mode='lines+markers', name='Historial Setpoint', line=dict(color='#1f77b4', width=2, dash='dash')
@@ -223,7 +219,6 @@ if verificar_password():
                         x=df_ventana_grafico['created_at'], y=df_ventana_grafico['temp_ambiente'],
                         mode='lines', name='Temperatura Ambiente', line=dict(color='#2ca02c', width=1.5)
                     ))
-                    # Añadir línea de ciclo de trabajo en el mismo gráfico o escala secundaria si lo prefieres
                     fig.add_trace(go.Scatter(
                         x=df_ventana_grafico['created_at'], y=df_ventana_grafico['duty_cycle'],
                         mode='lines', name='Esfuerzo Manta (PWM %)', line=dict(color='#9467bd', width=1, dash='dot')
@@ -242,14 +237,12 @@ if verificar_password():
                         yaxis=dict(title="Temperatura (°C) / Carga (%)"),
                         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
                     )
-
-                    st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': True})
+                    st.plotly_chart(fig, use_container_width=True)
                 else:
                     st.info("Alineando estampas de tiempo...")
 
                 # --- EXPORTAR EXCEL ---
                 st.subheader("📊 Descarga de Datos")
-                
                 buffer_excel = io.BytesIO()
                 with pd.ExcelWriter(buffer_excel, engine='openpyxl') as writer:
                     df_excel = df_procesado_cronologico[['created_at', 'nodo_id', 'temp_agua', 'temp_ambiente', 'setpoint', 'duty_cycle']].copy()
@@ -264,7 +257,6 @@ if verificar_password():
                         worksheet.column_dimensions[col_letter].width = max(max_len + 3, 12)
                 
                 buffer_excel.seek(0)
-
                 st.download_button(
                     label="📥 Exportar Historial a Excel (.xlsx)",
                     data=buffer_excel,
@@ -273,12 +265,9 @@ if verificar_password():
                 )
 
                 st.markdown("---")
-                
-                # --- TABLA DE REGISTROS RECIENTES ---
                 st.subheader("📋 Registro de Datos Recientes")
                 df_tabla_visual = df_procesado_cronologico.sort_values('created_at', ascending=False).copy()
                 df_tabla_visual.index = range(len(df_tabla_visual) - 1, -1, -1)
-                
                 st.dataframe(
                     df_tabla_visual[['id', 'created_at', 'nodo_id', 'temp_agua', 'temp_ambiente', 'setpoint', 'duty_cycle']], 
                     use_container_width=True
@@ -286,7 +275,6 @@ if verificar_password():
 
         renderizar_datos_dinamicos(nodo_seleccionado)
 
-    # --- BOTÓN MANUAL AL FINAL DE LA PÁGINA ---
     if st.button("🔄"):
         if 'sp_local' in st.session_state:
             del st.session_state.sp_local
