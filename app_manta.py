@@ -224,7 +224,7 @@ if verificar_password():
 
                 st.markdown("---")
                 st.subheader("📋 Registro de Datos Recientes")
-                st.dataframe(df_filtrado[['muestra N', 'fecha y hora', 'id nodo', 'temp. agua', 'temp. ambiente', 'setpoint']], use_container_width=True)
+                st.dataframe(df_filtrado[['id', 'created_at', 'nodo_id', 'temp_agua', 'temp_ambiente', 'setpoint']], use_container_width=True)
 
         renderizar_datos_dinamicos(nodo_seleccionado)
 
