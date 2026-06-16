@@ -145,9 +145,9 @@ if verificar_password():
                 with col1:
                     st.metric(label="Estado del Nodo", value="🟢 ONLINE")
                 with col2:
-                    st.metric(label="Temp. Agua (Táper)", value=f"{ultimas_lecturas['temp_agua']} °C")
+                    st.metric(label="Temp. Agua", value=f"{ultimas_lecturas['temp_agua']} °C")
                 with col3:
-                    st.metric(label="Temp. Ambiente (Congelador)", value=f"{ultimas_lecturas['temp_ambiente']} °C")
+                    st.metric(label="Temp. Ambiente", value=f"{ultimas_lecturas['temp_ambiente']} °C")
                 with col4:
                     st.metric(label="Setpoint Objetivo", value=f"{ultimas_lecturas['setpoint']} °C")
 
