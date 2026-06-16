@@ -134,9 +134,35 @@ if verificar_password():
                 else:
                     df_filtrado['created_at'] = df_filtrado['created_at'].dt.tz_localize(None)
 
-                # --- MUESTREO (1 MINUTO + CAMBIOS INSTANTÁNEOS) ---
-                df_cronologico_base = df_filtrado.sort_values('created_at', ascending=True)
+                # Rellenar nulos en duty_cycle por si existen registros antiguos sin la columna
+                if 'duty_cycle' in df_filtrado.columns:
+                    df_filtrado['duty_cycle'] = df_filtrado['duty_cycle'].fillna(0).astype(float)
+                else:
+                    df_filtrado['duty_cycle'] = 0.0
 
+                # --- ORDEN CRONOLÓGICO BASE PARA INTEGRACIÓN NUMÉRICA ---
+                df_cronologico_base = df_filtrado.sort_values('created_at', ascending=True).reset_index(drop=True)
+
+                # ==========================================
+                #  ALGORITMO DE CONSUMO ENERGÉTICO (PWM)
+                # ==========================================
+                # Parámetros físicos suministrados: 12V * 1.068A = 12.816 Watts
+                POTENCIA_MANTA_W = 12.0 * 1.068 
+                COSTO_KWH_MAGALLANES = 150.0  # Valor promedio de referencia CLP por kWh
+
+                # Delta de tiempo en horas entre registros consecutivos
+                df_cronologico_base['dt_horas'] = df_cronologico_base['created_at'].diff().dt.total_seconds() / 3600.0
+                df_cronologico_base['dt_horas'] = df_cronologico_base['dt_horas'].fillna(0.0)
+
+                # Energía consumida en el intervalo (Wh) transformada a kWh
+                # Fórmula: (Watts * Fracción_PWM * Horas) / 1000
+                df_cronologico_base['kwh_intervalo'] = (POTENCIA_MANTA_W * (df_cronologico_base['duty_cycle'] / 100.0) * df_cronologico_base['dt_horas']) / 1000.0
+                
+                consumo_total_kwh = df_cronologico_base['kwh_intervalo'].sum()
+                costo_estimado = consumo_total_kwh * COSTO_KWH_MAGALLANES
+                pwm_promedio = df_cronologico_base['duty_cycle'].mean()
+
+                # --- MUESTREO PARA GRÁFICOS (1 MINUTO + CAMBIOS INSTANTÁNEOS) ---
                 df_cronologico_base['minuto_floor'] = df_cronologico_base['created_at'].dt.floor('min')
                 df_1min = df_cronologico_base.drop_duplicates(subset=['minuto_floor'], keep='last')
 
@@ -147,7 +173,10 @@ if verificar_password():
                 df_procesado_cronologico = df_procesado_cronologico.drop(columns=['minuto_floor'])
 
                 ultimas_lecturas = df_cronologico_base.iloc[-1] 
+                current_pwm = int(ultimas_lecturas['duty_cycle'])
 
+                # --- FILA 1: MÉTRICAS TÉRMICAS ---
+                st.subheader("🌡️ Monitoreo de Variables Térmicas")
                 col1, col2, col3, col4 = st.columns(4)
                 with col1:
                     st.metric(label="Estado del Nodo", value="🟢 ONLINE")
@@ -158,13 +187,26 @@ if verificar_password():
                 with col4:
                     st.metric(label="Setpoint Objetivo", value=f"{st.session_state.sp_local} °C")
 
+                # --- FILA 2: MÉTRICAS ENERGÉTICAS (NUEVA) ---
+                st.subheader("⚡ Eficiencia y Consumo Eléctrico")
+                cole1, cole2, cole3, cole4 = st.columns(4)
+                with cole1:
+                    st.metric(label="Salida MOSFET Actual", value=f"{current_pwm} %")
+                with cole2:
+                    st.metric(label="Consumo Total Acumulado", value=f"{consumo_total_kwh:.5f} kWh")
+                with cole3:
+                    st.metric(label="Costo Energético Estimado", value=f"${costo_estimado:.2f} CLP")
+                with cole4:
+                    st.metric(label="Carga Promedio de la Manta", value=f"{pwm_promedio:.1f} %")
+
                 st.markdown("---")
 
+                # --- GRÁFICOS ---
                 ultima_estampa = df_procesado_cronologico['created_at'].max()
                 limite_hace_2_horas = ultima_estampa - timedelta(hours=2)
                 df_ventana_grafico = df_procesado_cronologico[df_procesado_cronologico['created_at'] >= limite_hace_2_horas]
 
-                st.subheader(f"📈 Curva Térmica Histórica - {nodo}")
+                st.subheader(f"📈 Curva Térmica e Historial PWM - {nodo}")
                 
                 if not df_ventana_grafico.empty:
                     fig = go.Figure()
@@ -181,6 +223,11 @@ if verificar_password():
                         x=df_ventana_grafico['created_at'], y=df_ventana_grafico['temp_ambiente'],
                         mode='lines', name='Temperatura Ambiente', line=dict(color='#2ca02c', width=1.5)
                     ))
+                    # Añadir línea de ciclo de trabajo en el mismo gráfico o escala secundaria si lo prefieres
+                    fig.add_trace(go.Scatter(
+                        x=df_ventana_grafico['created_at'], y=df_ventana_grafico['duty_cycle'],
+                        mode='lines', name='Esfuerzo Manta (PWM %)', line=dict(color='#9467bd', width=1, dash='dot')
+                    ))
 
                     fig.update_layout(
                         template="plotly_dark",
@@ -192,7 +239,7 @@ if verificar_password():
                             type='date',
                             tickformat='%H:%M:%S\n%d %b'
                         ),
-                        yaxis=dict(title="Temperatura (°C)"),
+                        yaxis=dict(title="Temperatura (°C) / Carga (%)"),
                         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
                     )
 
@@ -200,12 +247,13 @@ if verificar_password():
                 else:
                     st.info("Alineando estampas de tiempo...")
 
+                # --- EXPORTAR EXCEL ---
                 st.subheader("📊 Descarga de Datos")
                 
                 buffer_excel = io.BytesIO()
                 with pd.ExcelWriter(buffer_excel, engine='openpyxl') as writer:
-                    df_excel = df_procesado_cronologico[['created_at', 'nodo_id', 'temp_agua', 'temp_ambiente', 'setpoint']].copy()
-                    df_excel.columns = ['Fecha y Hora', 'ID Nodo', 'Temp Agua (°C)', 'Temp Ambiente (°C)', 'Setpoint (°C)']
+                    df_excel = df_procesado_cronologico[['created_at', 'nodo_id', 'temp_agua', 'temp_ambiente', 'setpoint', 'duty_cycle']].copy()
+                    df_excel.columns = ['Fecha y Hora', 'ID Nodo', 'Temp Agua (°C)', 'Temp Ambiente (°C)', 'Setpoint (°C)', 'Esfuerzo PWM (%)']
                     df_excel.to_excel(writer, index=False, sheet_name='Datos Telemetría')
                     
                     worksheet = writer.sheets['Datos Telemetría']
@@ -226,12 +274,13 @@ if verificar_password():
 
                 st.markdown("---")
                 
+                # --- TABLA DE REGISTROS RECIENTES ---
                 st.subheader("📋 Registro de Datos Recientes")
                 df_tabla_visual = df_procesado_cronologico.sort_values('created_at', ascending=False).copy()
                 df_tabla_visual.index = range(len(df_tabla_visual) - 1, -1, -1)
                 
                 st.dataframe(
-                    df_tabla_visual[['id', 'created_at', 'nodo_id', 'temp_agua', 'temp_ambiente', 'setpoint']], 
+                    df_tabla_visual[['id', 'created_at', 'nodo_id', 'temp_agua', 'temp_ambiente', 'setpoint', 'duty_cycle']], 
                     use_container_width=True
                 )
 
