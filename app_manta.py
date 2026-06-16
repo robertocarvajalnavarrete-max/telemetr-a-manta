@@ -83,7 +83,8 @@ if verificar_password():
     @st.cache_data(ttl=60, show_spinner=False)
     def cargar_datos():
         try:
-            respuesta = supabase.table("telemetria_mantas").select("*").order("created_at", desc=True).limit(300).execute()
+            # Aumentado a 1000 para garantizar cubrir la ventana de 2 horas tras el filtro de 1 minuto
+            respuesta = supabase.table("telemetria_mantas").select("*").order("created_at", desc=True).limit(1000).execute()
             df = pd.DataFrame(respuesta.data)
             if not df.empty:
                 df['created_at'] = pd.to_datetime(df['created_at'])
@@ -100,11 +101,12 @@ if verificar_password():
         nodos_disponibles = df_inicial['nodo_id'].unique()
         nodo_seleccionado = st.sidebar.selectbox("Seleccionar Nodo a Monitorear:", nodos_disponibles)
         
+        if "nodo_actual" not in st.session_state or st.session_state.nodo_actual != nodo_seleccionado:
+            st.session_state.nodo_actual = nodo_seleccionado
+            st.session_state.sp_local = obtener_setpoint_nube(nodo_seleccionado)
+        
         st.sidebar.markdown("---")
         st.sidebar.subheader("Configuración de Banda Térmica")
-        
-        if "sp_local" not in st.session_state:
-            st.session_state.sp_local = obtener_setpoint_nube(nodo_seleccionado)
         
         nuevo_sp = st.sidebar.slider(
             "Setpoint Objetivo Precision (°C):", 
@@ -132,7 +134,23 @@ if verificar_password():
                 else:
                     df_filtrado['created_at'] = df_filtrado['created_at'].dt.tz_localize(None)
 
-                ultimas_lecturas = df_filtrado.iloc[0] 
+                # --- LÓGICA DE MUESTREO INTELIGENTE (1 MINUTO + CAMBIOS INSTANTÁNEOS) ---
+                df_cronologico_base = df_filtrado.sort_values('created_at', ascending=True)
+
+                # 1. Extraer el último dato disponible de cada minuto como comportamiento base
+                df_cronologico_base['minuto_floor'] = df_cronologico_base['created_at'].dt.floor('min')
+                df_1min = df_cronologico_base.drop_duplicates(subset=['minuto_floor'], keep='last')
+
+                # 2. Capturar instantáneamente la fila donde el setpoint cambió respecto a la anterior
+                mask_cambio_sp = df_cronologico_base['setpoint'] != df_cronologico_base['setpoint'].shift(1)
+                df_cambios_sp = df_cronologico_base[mask_cambio_sp]
+
+                # 3. Combinar ambos criterios, remover duplicados por ID y ordenar cronológicamente
+                df_procesado_cronologico = pd.concat([df_1min, df_cambios_sp]).drop_duplicates(subset=['id']).sort_values('created_at', ascending=True)
+                df_procesado_cronologico = df_procesado_cronologico.drop(columns=['minuto_floor'])
+
+                # Extraemos las métricas superiores del último registro absoluto en tiempo real
+                ultimas_lecturas = df_cronologico_base.iloc[-1] 
 
                 col1, col2, col3, col4 = st.columns(4)
                 with col1:
@@ -146,29 +164,37 @@ if verificar_password():
 
                 st.markdown("---")
 
-                df_cronologico = df_filtrado.sort_values('created_at', ascending=True)
-                
-                ultima_estampa = df_cronologico['created_at'].max()
+                # El gráfico ahora consume el dataset procesado por minuto + transiciones rápidas
+                ultima_estampa = df_procesado_cronologico['created_at'].max()
                 limite_hace_2_horas = ultima_estampa - timedelta(hours=2)
-                df_ventana_grafico = df_cronologico[df_cronologico['created_at'] >= limite_hace_2_horas]
+                df_ventana_grafico = df_procesado_cronologico[df_procesado_cronologico['created_at'] >= limite_hace_2_horas]
 
-                st.subheader(f"📈 Curva Térmica Histórica en Tiempo Real - {nodo}")
+                st.subheader(f"📈 Curva Térmica Histórica (Filtro 1 min + Cambios SP) - {nodo}")
                 
                 if not df_ventana_grafico.empty:
                     fig = go.Figure()
                     
                     fig.add_trace(go.Scatter(
                         x=df_ventana_grafico['created_at'], y=df_ventana_grafico['setpoint'],
-                        mode='lines', name='Setpoint Objetivo', line=dict(color='#1f77b4', width=2, dash='dash')
+                        mode='lines+markers', name='Historial Setpoint', line=dict(color='#1f77b4', width=2, dash='dash')
                     ))
                     fig.add_trace(go.Scatter(
                         x=df_ventana_grafico['created_at'], y=df_ventana_grafico['temp_agua'],
-                        mode='lines+markers', name='Temperatura en Agua', line=dict(color='#ff7f0e', width=2.5)
+                        mode='lines+markers', name='Temperatura en Agua', line=dict(color='#ff7f0e', width=2)
                     ))
                     fig.add_trace(go.Scatter(
                         x=df_ventana_grafico['created_at'], y=df_ventana_grafico['temp_ambiente'],
-                        mode='lines', name='Temperatura Ambiente', line=dict(color='#2ca02c', width=2)
+                        mode='lines', name='Temperatura Ambiente', line=dict(color='#2ca02c', width=1.5)
                     ))
+
+                    fig.add_hline(
+                        y=st.session_state.sp_local, 
+                        line_width=2, 
+                        line_dash="dot", 
+                        line_color="#e74c3c",
+                        annotation_text="🎯 Setpoint Web Actual (Enviado)",
+                        annotation_position="top left"
+                    )
 
                     fig.update_layout(
                         template="plotly_dark",
@@ -192,7 +218,7 @@ if verificar_password():
                 
                 buffer_excel = io.BytesIO()
                 with pd.ExcelWriter(buffer_excel, engine='openpyxl') as writer:
-                    df_excel = df_cronologico[['created_at', 'nodo_id', 'temp_agua', 'temp_ambiente', 'setpoint']].copy()
+                    df_excel = df_procesado_cronologico[['created_at', 'nodo_id', 'temp_agua', 'temp_ambiente', 'setpoint']].copy()
                     df_excel.columns = ['Fecha y Hora', 'ID Nodo', 'Temp Agua (°C)', 'Temp Ambiente (°C)', 'Setpoint (°C)']
                     df_excel.to_excel(writer, index=False, sheet_name='Datos Telemetría')
                     
@@ -214,13 +240,13 @@ if verificar_password():
 
                 st.markdown("---")
                 
-                # --- MODIFICACIÓN DE LA TABLA AJUSTADA ---
+                # --- TABLA VISUAL DE DATOS FILTRADOS ---
                 st.subheader("📋 Registro de Datos Recientes")
                 
-                # Conservamos el orden descendente de tu foto original (el más nuevo arriba)
-                df_tabla_visual = df_filtrado.copy()
+                # Invertimos el orden del dataset filtrado para que el más nuevo quede arriba en la tabla
+                df_tabla_visual = df_procesado_cronologico.sort_values('created_at', ascending=False).copy()
                 
-                # Invertimos exclusivamente el índice: el número más alto arriba y el 0 abajo del todo
+                # Reasignamos el índice manual invertido (el valor más alto arriba, el 0 abajo)
                 df_tabla_visual.index = range(len(df_tabla_visual) - 1, -1, -1)
                 
                 st.dataframe(
@@ -233,5 +259,7 @@ if verificar_password():
     if st.button("🔄"):
         if 'sp_local' in st.session_state:
             del st.session_state.sp_local
+        if 'nodo_actual' in st.session_state:
+            del st.session_state.nodo_actual
         cargar_datos.clear()
         st.rerun()
