@@ -1,4 +1,4 @@
-﻿import streamlit as st
+import streamlit as st
 import pandas as pd
 from supabase import create_client, Client
 from datetime import datetime, timedelta
@@ -100,6 +100,7 @@ if verificar_password():
         nodos_disponibles = df_inicial['nodo_id'].unique()
         nodo_seleccionado = st.sidebar.selectbox("Seleccionar Nodo a Monitorear:", nodos_disponibles)
         
+        # Inicialización controlada
         if "nodo_actual" not in st.session_state or st.session_state.nodo_actual != nodo_seleccionado:
             st.session_state.nodo_actual = nodo_seleccionado
             st.session_state.sp_local = obtener_setpoint_nube(nodo_seleccionado)
@@ -115,17 +116,12 @@ if verificar_password():
             step=0.1
         )
         
-        # --- ACCIÓN DEL SLIDER COMPORTÁNDOSE COMO EL BOTÓN DE RESET ---
+        # --- IF DE DETECCIÓN DE CAMBIO (SIMULA EL REFRESH AUTOMÁTICAMENTE) ---
         if nuevo_sp != st.session_state.sp_local:
             actualizar_setpoint_nube(nodo_seleccionado, nuevo_sp)
-            st.session_state.sp_local = nuevo_sp
-            
-            # Forzamos la limpieza idéntica al botón manual de actualización
-            cargar_datos.clear() 
-            if 'nodo_actual' in st.session_state:
-                del st.session_state.nodo_actual
-                
-            st.rerun()
+            st.session_state.sp_local = nuevo_sp  # Forzamos el valor en memoria local inmediatamente
+            cargar_datos.clear()                  # Limpiamos el caché de la telemetría por completo
+            st.rerun()                            # Ejecutamos el refresh nativo por software
 
         @st.fragment(run_every=60)
         def renderizar_datos_dinamicos(nodo):
@@ -186,8 +182,6 @@ if verificar_password():
                         mode='lines', name='Temperatura Ambiente', line=dict(color='#2ca02c', width=1.5)
                     ))
 
-                    # LÍNEA ROJA ELIMINADA POR COMPLETO DESDE AQUÍ
-
                     fig.update_layout(
                         template="plotly_dark",
                         margin=dict(l=50, r=40, t=20, b=50),
@@ -243,6 +237,7 @@ if verificar_password():
 
         renderizar_datos_dinamicos(nodo_seleccionado)
 
+    # --- BOTÓN MANUAL AL FINAL DE LA PÁGINA ---
     if st.button("🔄"):
         if 'sp_local' in st.session_state:
             del st.session_state.sp_local
