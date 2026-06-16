@@ -173,7 +173,7 @@ if verificar_password():
                 current_pwm = int(ultimas_lecturas['duty_cycle'])
 
                 # --- FILA 1: MÉTRICAS TÉRMICAS ---
-                st.subheader("🌡️ Monitoreo de Variables Térmicas")
+                st.subheader("Monitoreo de Variables Térmicas")
                 col1, col2, col3, col4 = st.columns(4)
                 with col1:
                     st.metric(label="Estado del Nodo", value="🟢 ONLINE")
@@ -239,7 +239,7 @@ if verificar_password():
                     st.info("Alineando estampas de tiempo...")
 
                 # --- EXPORTAR EXCEL ---
-                st.subheader("📊 Descarga de Datos")
+                st.subheader("Descarga de Datos")
                 buffer_excel = io.BytesIO()
                 with pd.ExcelWriter(buffer_excel, engine='openpyxl') as writer:
                     df_excel = df_procesado_cronologico[['created_at', 'nodo_id', 'temp_agua', 'temp_ambiente', 'setpoint', 'duty_cycle']].copy()
@@ -262,7 +262,7 @@ if verificar_password():
                 )
 
                 st.markdown("---")
-                st.subheader("📋 Registro de Datos Recientes")
+                st.subheader("Registro de Datos Recientes")
                 df_tabla_visual = df_procesado_cronologico.sort_values('created_at', ascending=False).copy()
                 df_tabla_visual.index = range(len(df_tabla_visual) - 1, -1, -1)
                 st.dataframe(
