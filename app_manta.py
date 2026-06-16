@@ -57,12 +57,12 @@ if verificar_password():
     supabase = init_connection()
 
     # Barra lateral con botón de cierre de sesión
-    st.sidebar.title("🔐 Sesión Activa")
+    st.sidebar.title("Sesión Activa")
     if st.sidebar.button("Cerrar Sesión"):
         st.session_state.autenticado = False
         st.rerun()
 
-    st.title("🌡️ Panel de Monitoreo Centralizado - Proyecto Manta")
+    st.title("Panel de Monitoreo Centralizado Proyecto Manta")
     st.subheader("Monitoreo térmico en tiempo real para nodos en terreno")
 
     # --- FUNCIONES DE BASE DE DATOS ---
