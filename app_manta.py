@@ -85,7 +85,7 @@ if verificar_password():
     @st.cache_data(ttl=60, show_spinner=False)
     def cargar_datos():
         try:
-            respuesta = supabase.table("telemetria_mantas").select("*").order("created_at", desc=True).limit(1000).execute()
+            respuesta = supabase.table("telemetria_mantas").select("*").order("created_at", desc=True).limit(5000).execute()
             df = pd.DataFrame(respuesta.data)
             if not df.empty:
                 df['created_at'] = pd.to_datetime(df['created_at'])
