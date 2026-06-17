@@ -200,7 +200,7 @@ if verificar_password():
 
                 # --- GRÁFICOS ---
                 ultima_estampa = df_procesado_cronologico['created_at'].max()
-                limite_hace_2_horas = ultima_estampa - timedelta(hours=2)
+                limite_hace_10_horas = ultima_estampa - timedelta(hours=10)
                 df_ventana_grafico = df_procesado_cronologico[df_procesado_cronologico['created_at'] >= limite_hace_2_horas]
 
                 st.subheader(f"📈 Curva Térmica e Historial PWM - {nodo}")
