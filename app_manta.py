@@ -63,14 +63,13 @@ def calcular_consumo_dinamico(df_datos, desde_fecha=None):
     
     # Filtrar cronológicamente si existe un reset registrado
     if desde_fecha is not None:
-        # Asegurar compatibilidad de zonas horarias (Mismo timezone que los datos)
         if df_trabajo['created_at'].dt.tz is not None and desde_fecha.tzinfo is None:
             desde_fecha = desde_fecha.replace(tzinfo=df_trabajo['created_at'].dt.tz)
         
         # Filtro estricto posterior al hito de reset
         df_trabajo = df_trabajo[df_trabajo['created_at'] > desde_fecha]
         
-    # Si no hay suficientes puntos tras el reset, el consumo del ensayo es 0
+    # Si no hay suficientes puntos nuevos tras el reset para integrar, el consumo es legítimamente 0
     if df_trabajo.shape[0] < 2:
         return 0.0, 0.0
         
@@ -86,7 +85,6 @@ def calcular_consumo_dinamico(df_datos, desde_fecha=None):
         t2 = df_trabajo.iloc[i]['created_at']
         delta_horas = (t2 - t1).total_seconds() / 3600.0
         
-        # Ignorar vacíos temporales huérfanos por desconexión
         if delta_horas > 0.16:
             delta_horas = 0.016  
             
@@ -123,8 +121,13 @@ def obtener_acumulados_y_metadata(nodo, df_telemetria):
         
         # Consumo Persistente del Ensayo
         if fecha_ultimo_reset is not None:
+            # Asegurar zona horaria para la comparación
+            if df_telemetria['created_at'].dt.tz is not None and fecha_ultimo_reset.tzinfo is None:
+                fecha_ultimo_reset = fecha_ultimo_reset.replace(tzinfo=df_telemetria['created_at'].dt.tz)
+                
             ultimo_dato_time = df_telemetria['created_at'].max()
-            # Forzar limpieza inmediata si el reset es igual o posterior al último dato descargado
+            
+            # Si el reset es igual o posterior al último dato, o si los datos nuevos no bastan para calcular, es 0
             if fecha_ultimo_reset >= ultimo_dato_time:
                 kwh_ensayo, costo_ensayo = 0.0, 0.0
             else:
@@ -143,13 +146,10 @@ def obtener_acumulados_y_metadata(nodo, df_telemetria):
 
 def ejecutar_reset_nube(nodo, estampa_tiempo):
     """
-    Guarda de manera definitiva el instante exacto del reset en la base de datos relacional.
-    Adiciona un segundo de holgura para evitar solapamientos con el registro actual.
+    Guarda el instante exacto del reset en la base de datos relacional.
     """
     try:
-        estampa_con_holgura = estampa_tiempo + timedelta(seconds=1)
-        iso_timestamp = estampa_con_holgura.isoformat()
-        
+        iso_timestamp = estampa_tiempo.isoformat()
         supabase.table("acumulados_nodos").update({
             "kwh_desde_reset": 0.0,
             "costo_desde_reset": 0.0,
@@ -254,7 +254,7 @@ if nodo:
         pwm_promedio = df_cronologico['duty_cycle'].mean() if 'duty_cycle' in df_cronologico.columns else df_cronologico['duty_cycle_mean'].mean()
         current_pwm = int(ultimas_lecturas.get('duty_cycle', 0))
         
-        # Recuperar la información histórica y de reset persistente desde Supabase
+        # Obtener acumulados procesando de manera limpia el dataframe
         datos_acumulados = obtener_acumulados_y_metadata(nodo, df_cronologico)
 
         # --- FILA 1: VARIABLES TÉRMICAS ---
@@ -289,7 +289,12 @@ if nodo:
             st.caption(f"🌍 **Acumulado Histórico Total del Nodo:** {datos_acumulados['kwh_historico_total']:.5f} kWh")
         with col_hist2:
             if datos_acumulados['ultimo_reset_at']:
-                st.caption(f"⏱️ **Último reinicio de ensayo:** {datos_acumulados['ultimo_reset_at'].strftime('%Y-%m-%d %H:%M:%S')}")
+                # Ajustar visualización del último reset al timezone local para el operador
+                try:
+                    fecha_local = datos_acumulados['ultimo_reset_at'].tz_convert('America/Punta_Arenas')
+                except:
+                    fecha_local = datos_acumulados['ultimo_reset_at']
+                st.caption(f"⏱️ **Último reinicio de ensayo:** {fecha_local.strftime('%Y-%m-%d %H:%M:%S')}")
             else:
                 st.caption("⏱️ **Último reinicio de ensayo:** Sin registros previos")
         with col_btn:
