@@ -20,64 +20,57 @@ if not st.session_state.autenticado:
             st.rerun()
     st.stop()
 
-# --- SIDEBAR: CONTROLES Y FILTROS ---
+# --- SIDEBAR: CONFIGURACIÓN Y FILTROS ---
 st.sidebar.header("⚙️ Configuración")
 nodos_raw = supabase.table("configuracion_nodos").select("nodo_id").execute()
 nodos_lista = [n['nodo_id'] for n in nodos_raw.data]
 nodo_sel = st.sidebar.selectbox("Seleccionar Nodo:", nodos_lista)
 
+# Recuperar configuración actual
+cfg = supabase.table("configuracion_nodos").select("*").eq("nodo_id", nodo_sel).single().execute().data
+
+# Control Setpoint
+nuevo_sp = st.sidebar.number_input("Ajustar Setpoint (°C):", min_value=0.0, max_value=20.0, value=float(cfg['setpoint']), step=0.1)
+if st.sidebar.button("Guardar Setpoint"):
+    supabase.table("configuracion_nodos").update({"setpoint": nuevo_sp}).eq("nodo_id", nodo_sel).execute()
+    st.sidebar.success("Setpoint actualizado")
+    st.rerun()
+
+# Control de fechas
 st.sidebar.header("📅 Rango de Consulta")
-dias = st.sidebar.slider("Días hacia atrás:", 1, 30, 1)
+dias = st.sidebar.number_input("Ver días hacia atrás:", min_value=1, max_value=365, value=7)
 fecha_inicio = datetime.now() - timedelta(days=dias)
 
-# --- LÓGICA DE DATOS Y CORRECCIÓN HORARIA ---
+# --- LÓGICA DE DATOS ---
 datos = supabase.table("telemetria_mantas").select("*").eq("nodo_id", nodo_sel).gte("created_at", fecha_inicio.isoformat()).execute()
 df = pd.DataFrame(datos.data)
 
 if not df.empty:
-    # 1. Convertir a datetime y restar 3 horas (UTC-3 Punta Arenas)
+    # Corrección horaria Punta Arenas
     df['created_at'] = pd.to_datetime(df['created_at']) - timedelta(hours=3)
-    
-    # 2. Crear una columna de hora como string para el gráfico (evita desfases del navegador)
-    df['hora_str'] = df['created_at'].dt.strftime('%H:%M:%S')
-    
-    # 3. Establecer el índice para la tabla
+    df['hora_str'] = df['created_at'].dt.strftime('%d/%m %H:%M:%S')
     df = df.set_index('created_at')
 
 # --- DASHBOARD ---
 st.title(f"Centro de Control: {nodo_sel}")
 
 if not df.empty:
-    # KPIs
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Temp. Agua", f"{df['temp_agua'].iloc[-1]}°C")
     c2.metric("Temp. Amb.", f"{df['temp_ambiente'].iloc[-1]}°C")
-    
-    cfg = supabase.table("configuracion_nodos").select("*").eq("nodo_id", nodo_sel).single().execute().data
-    c3.metric("Setpoint", f"{cfg['setpoint']}°C")
+    c3.metric("Setpoint Act.", f"{cfg['setpoint']}°C")
     c4.metric("Potencia PID", f"{df['duty_cycle'].iloc[-1]}%")
     
-    # Gráfico Corregido: Usamos 'hora_str' como índice para el eje X
     st.subheader("📊 Gráfico de Rendimiento")
-    df_grafico = df.set_index('hora_str')[['temp_agua', 'temp_ambiente', 'setpoint']]
-    st.line_chart(df_grafico)
+    # El gráfico usa el índice 'hora_str' que es texto, evitando desfases temporales
+    st.line_chart(df.set_index('hora_str')[['temp_agua', 'temp_ambiente', 'setpoint']])
 else:
-    st.warning("No hay datos disponibles para el nodo y rango seleccionados.")
+    st.warning("No hay datos en el rango seleccionado.")
 
 # --- TABLA Y EXPORTACIÓN ---
 if not df.empty:
     st.subheader("📋 Tabla de Telemetría")
-    
-    # Limpiar zona horaria para Excel (evita error ValueError)
     df_reporte = df.reset_index()
     if df_reporte['created_at'].dt.tz is not None:
         df_reporte['created_at'] = df_reporte['created_at'].dt.tz_localize(None)
-    
-    st.dataframe(df_reporte, use_container_width=True)
-    
-    buffer = io.BytesIO()
-    with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-        df_reporte.to_excel(writer, index=False, sheet_name='Reporte')
-    st.download_button("📥 Descargar Excel", data=buffer, file_name=f"reporte_{nodo_sel}.xlsx")
-
-if st.button("🔄 Recargar"): st.rerun()
+    st.dataframe(
