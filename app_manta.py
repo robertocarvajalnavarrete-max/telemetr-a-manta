@@ -54,22 +54,28 @@ if not st.session_state.autenticado:
 def calcular_consumo_dinamico(df_datos, desde_fecha=None):
     """
     Calcula el consumo eléctrico acumulado integrando los puntos de telemetría.
-    Si se pasa 'desde_fecha', solo acumula los registros posteriores a ese hito.
+    Si se pasa 'desde_fecha', filtra de forma segura respetando las zonas horarias.
     """
     if df_datos.empty:
         return 0.0, 0.0
         
     df_trabajo = df_datos.copy()
     
-    # Filtrar cronológicamente si existe un reset registrado
+    # Filtrar cronológicamente asegurando coincidencia absoluta de zonas horarias
     if desde_fecha is not None:
-        if df_trabajo['created_at'].dt.tz is not None and desde_fecha.tzinfo is None:
-            desde_fecha = desde_fecha.replace(tzinfo=df_trabajo['created_at'].dt.tz)
+        if df_trabajo['created_at'].dt.tz is not None:
+            if desde_fecha.tzinfo is None:
+                desde_fecha = desde_fecha.tz_localize('UTC').tz_convert(df_trabajo['created_at'].dt.tz)
+            else:
+                desde_fecha = desde_fecha.tz_convert(df_trabajo['created_at'].dt.tz)
+        else:
+            if desde_fecha.tzinfo is not None:
+                desde_fecha = desde_fecha.tz_convert(None)
         
-        # Filtro estricto posterior al hito de reset
+        # Filtro estricto posterior al hito del reset
         df_trabajo = df_trabajo[df_trabajo['created_at'] > desde_fecha]
         
-    # Si no hay suficientes puntos nuevos tras el reset para integrar, el consumo es legítimamente 0
+    # Si no hay suficientes puntos tras el corte, el consumo del ensayo es 0
     if df_trabajo.shape[0] < 2:
         return 0.0, 0.0
         
@@ -97,8 +103,8 @@ def calcular_consumo_dinamico(df_datos, desde_fecha=None):
 
 def obtener_acumulados_y_metadata(nodo, df_telemetria):
     """
-    Consulta la metadata del nodo en Supabase para obtener la fecha del último reset
-    y calcula de forma robusta los consumos absolutos y del ensayo actual.
+    Consulta la metadata en Supabase, normaliza la zona horaria del reset y
+    desglosa el consumo histórico total frente al consumo del ensayo actual.
     """
     kwh_total, costo_total = 0.0, 0.0
     kwh_ensayo, costo_ensayo = 0.0, 0.0
@@ -114,20 +120,24 @@ def obtener_acumulados_y_metadata(nodo, df_telemetria):
     except Exception as e:
         print(f"Error al recuperar fecha de reset: {e}")
 
-    # 2. Calcular consumos basados en el dataframe de telemetría cargado
+    # 2. Calcular consumos homogeneizando zonas horarias
     if not df_telemetria.empty:
-        # Consumo Histórico Completo
         kwh_total, costo_total = calcular_consumo_dinamico(df_telemetria)
         
-        # Consumo Persistente del Ensayo
         if fecha_ultimo_reset is not None:
-            # Asegurar zona horaria para la comparación
-            if df_telemetria['created_at'].dt.tz is not None and fecha_ultimo_reset.tzinfo is None:
-                fecha_ultimo_reset = fecha_ultimo_reset.replace(tzinfo=df_telemetria['created_at'].dt.tz)
+            # Forzar de forma explícita que la fecha de reset use el mismo huso horario que la telemetría
+            if df_telemetria['created_at'].dt.tz is not None:
+                if fecha_ultimo_reset.tzinfo is None:
+                    fecha_ultimo_reset = fecha_ultimo_reset.tz_localize('UTC').tz_convert(df_telemetria['created_at'].dt.tz)
+                else:
+                    fecha_ultimo_reset = fecha_ultimo_reset.tz_convert(df_telemetria['created_at'].dt.tz)
+            else:
+                if fecha_ultimo_reset.tzinfo is not None:
+                    fecha_ultimo_reset = fecha_ultimo_reset.tz_convert(None)
                 
             ultimo_dato_time = df_telemetria['created_at'].max()
             
-            # Si el reset es igual o posterior al último dato, o si los datos nuevos no bastan para calcular, es 0
+            # Comparación segura entre fechas del mismo huso horario
             if fecha_ultimo_reset >= ultimo_dato_time:
                 kwh_ensayo, costo_ensayo = 0.0, 0.0
             else:
@@ -146,7 +156,7 @@ def obtener_acumulados_y_metadata(nodo, df_telemetria):
 
 def ejecutar_reset_nube(nodo, estampa_tiempo):
     """
-    Guarda el instante exacto del reset en la base de datos relacional.
+    Guarda el instante exacto del reset en la base de datos de Supabase.
     """
     try:
         iso_timestamp = estampa_tiempo.isoformat()
@@ -254,7 +264,7 @@ if nodo:
         pwm_promedio = df_cronologico['duty_cycle'].mean() if 'duty_cycle' in df_cronologico.columns else df_cronologico['duty_cycle_mean'].mean()
         current_pwm = int(ultimas_lecturas.get('duty_cycle', 0))
         
-        # Obtener acumulados procesando de manera limpia el dataframe
+        # Procesar los consumos aplicando el alineamiento de zona horaria
         datos_acumulados = obtener_acumulados_y_metadata(nodo, df_cronologico)
 
         # --- FILA 1: VARIABLES TÉRMICAS ---
@@ -271,7 +281,7 @@ if nodo:
 
         st.markdown("---")
 
-        # --- FILA 2: VARIABLES ENERGÉTICAS CON RESET REAL ---
+        # --- FILA 2: VARIABLES ENERGÉTICAS CON RESET SÍNCRONO ---
         st.subheader("Eficiencia y Consumo Eléctrico")
         cole1, col_ens1, col_ens2, cole4 = st.columns(4)
         with cole1:
@@ -289,7 +299,6 @@ if nodo:
             st.caption(f"🌍 **Acumulado Histórico Total del Nodo:** {datos_acumulados['kwh_historico_total']:.5f} kWh")
         with col_hist2:
             if datos_acumulados['ultimo_reset_at']:
-                # Ajustar visualización del último reset al timezone local para el operador
                 try:
                     fecha_local = datos_acumulados['ultimo_reset_at'].tz_convert('America/Punta_Arenas')
                 except:
@@ -310,7 +319,7 @@ if nodo:
 
         st.markdown("---")
 
-        # --- FILA 3: GRÁFICO DE TENDENCIAS EN TIEMPO REAL ---
+        # --- FILA 3: GRÁFICO DE TENDENCIAS ---
         st.subheader(f"📈 Curva Térmica e Historial PWM - {nodo} (Últimas 24 Horas)")
         
         ultima_estampa = df_cronologico['created_at'].max()
@@ -330,7 +339,7 @@ if nodo:
 
         st.markdown("---")
 
-        # --- FILA 4: REGISTRO RECIENTE ---
+        # --- FILA 4: TABLA DE DATOS RECIENTES ---
         st.subheader("📋 Registro de Datos Recientes (Telemetría Histórica)")
         df_tabla_visible = df_cronologico.sort_values('created_at', ascending=False).copy()
         df_tabla_visible['created_at'] = df_tabla_visible['created_at'].dt.strftime('%Y-%m-%d %H:%M:%S')
