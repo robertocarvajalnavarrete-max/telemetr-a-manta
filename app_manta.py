@@ -28,8 +28,15 @@ supabase = st.session_state.supabase
 def obtener_acumulados(nodo):
     try:
         res = supabase.table("acumulados_nodos").select("*").eq("nodo_id", nodo).execute()
-        if res.data:
-            return res.data[0]
+        if res.data and len(res.data) > 0:
+            raw_data = res.data[0]
+            # CORRECCIÓN DE TIPOS: Forzar conversión limpia a float para evitar bloqueos de renderizado
+            return {
+                "kwh_historico_total": float(raw_data.get("kwh_historico_total", 0.0) or 0.0),
+                "costo_historico_total": float(raw_data.get("costo_historico_total", 0.0) or 0.0),
+                "kwh_desde_reset": float(raw_data.get("kwh_desde_reset", 0.0) or 0.0),
+                "costo_desde_reset": float(raw_data.get("costo_desde_reset", 0.0) or 0.0)
+            }
     except Exception as e:
         print(f"Error consultando acumulados: {e}")
     return {
@@ -52,7 +59,6 @@ def ejecutar_reset_nube(nodo):
 
 def cargar_datos_telemetria(nodo):
     try:
-        # Extraemos los datos ordenados de forma descendente (más recientes primero)
         res = supabase.table("telemetria_mantas")\
             .select("*")\
             .eq("nodo_id", nodo)\
@@ -62,19 +68,14 @@ def cargar_datos_telemetria(nodo):
         
         if res.data:
             df = pd.DataFrame(res.data)
-            # Convertir a datetime garantizando manejo de zona horaria nativa
             df['created_at'] = pd.to_datetime(df['created_at'], utc=True)
             
-            # CORRECCIÓN: Convertir explícitamente a la zona horaria local de Chile
-            # Esto soluciona el desfase de horas entre la base de datos y la visualización
+            # Localización horaria adaptada a la región
             try:
                 df['created_at'] = df['created_at'].dt.tz_convert('America/Punta_Arenas')
             except Exception:
-                # Fallback en caso de entornos sin tzdata cargado correctamente
                 df['created_at'] = df['created_at'].dt.tz_localize(None) - timedelta(hours=3)
 
-            # Devolvemos el dataframe ordenado cronológicamente (más antiguo a más reciente)
-            # Esto asegura que .iloc[-1] sea SIEMPRE el último dato real en el tiempo
             df = df.sort_values('created_at').reset_index(drop=True)
             return df
     except Exception as e:
@@ -138,12 +139,11 @@ if nodo:
     df_cronologico = cargar_datos_telemetria(nodo)
     
     if not df_cronologico.empty:
-        # Al estar ordenado cronológicamente, el último índice es el dato más fresco del sensor
         ultimas_lecturas = df_cronologico.iloc[-1] 
         pwm_promedio = df_cronologico['duty_cycle'].mean()
         current_pwm = int(ultimas_lecturas['duty_cycle'])
         
-        # Cargar contadores persistentes en tiempo real
+        # Carga dinámica garantizando tipos numéricos puros
         datos_acumulados = obtener_acumulados(nodo)
 
         # --- FILA 1: MÉTRICAS TÉRMICAS ---
@@ -166,18 +166,19 @@ if nodo:
         with cole1:
             st.metric(label="Salida MOSFET Actual", value=f"{current_pwm} %")
         with cole2:
-            st.metric(label="Consumo Ensayo Actual", value=f"{float(datos_acumulados['kwh_desde_reset']):.5f} kWh")
-        with cole3:
-            st.metric(label="Costo Ensayo Actual", value=f"${float(datos_acumulados['costo_desde_reset']):.2f} CLP")
+            st.metric(label="Consumo Ensayo Actual", value=f"{datos_acumulados['kwh_desde_reset']:.5f} kWh")
+        with col3:
+            # Corrección adicional de la columna para evitar saltos visuales en blanco
+            st.metric(label="Costo Ensayo Actual", value=f"${datos_acumulados['costo_desde_reset']:.2f} CLP")
         with cole4:
             st.metric(label="Carga Promedio de la Manta", value=f"{pwm_promedio:.1f} %")
 
         # --- FILA 2.5: SECCIÓN DE BORRADO E HISTÓRICO GLOBAL ---
         col_hist1, col_hist2, col_btn = st.columns([2, 2, 1])
         with col_hist1:
-            st.caption(f"🌍 **Acumulado Histórico Total del Nodo:** {float(datos_acumulados['kwh_historico_total']):.5f} kWh")
+            st.caption(f"🌍 **Acumulado Histórico Total del Nodo:** {datos_acumulados['kwh_historico_total']:.5f} kWh")
         with col_hist2:
-            st.caption(f"💰 **Costo Histórico Total:** ${float(datos_acumulados['costo_historico_total']):.2f} CLP")
+            st.caption(f"💰 **Costo Histórico Total:** ${datos_acumulados['costo_historico_total']:.2f} CLP")
         with col_btn:
             if st.button("⚠️ Resetear Cuenta Ensayo", use_container_width=True):
                 ejecutar_reset_nube(nodo)
@@ -194,11 +195,7 @@ if nodo:
         limite_hace_24_horas = ultima_estampa - timedelta(hours=24)
         df_ventana_grafico = df_cronologico[df_cronologico['created_at'] >= limite_hace_24_horas].copy()
         
-        # Eliminamos la información de zona horaria solo para que el motor de gráficos de Streamlit
-        # no genere conflictos de renderizado con Altair
         df_ventana_grafico['created_at_visual'] = df_ventana_grafico['created_at'].dt.tz_localize(None)
-        
-        # Remuestreo por minuto para suavizar las curvas de telemetría
         df_ventana_grafico['minuto'] = df_ventana_grafico['created_at_visual'].dt.floor('min')
         df_grafico_render = df_ventana_grafico.groupby('minuto').mean(numeric_only=True).reset_index()
 
@@ -211,16 +208,11 @@ if nodo:
 
         st.markdown("---")
 
-        # --- FILA 4: TABLA DE VALORES HISTÓRICOS (CORREGIDA Y ORDENADA DESCIENTE) ---
+        # --- FILA 4: TABLA DE VALORES HISTÓRICOS ---
         st.subheader("📋 Registro de Datos Recientes (Telemetría Histórica)")
-        
-        # Creamos la tabla mostrando los datos más nuevos al principio para facilitar la auditoría visual
         df_tabla_visible = df_cronologico.sort_values('created_at', ascending=False).copy()
-        
-        # Formateamos la estampa de tiempo local eliminando microsegundos para una visualización limpia
         df_tabla_visible['created_at'] = df_tabla_visible['created_at'].dt.strftime('%Y-%m-%d %H:%M:%S')
         
-        # Selección y orden de columnas clave para el análisis en terreno
         columnas_ordenadas = ['created_at', 'temp_agua', 'temp_ambiente', 'setpoint', 'duty_cycle', 'nodo_id']
         df_tabla_visible = df_tabla_visible[[col for col in columnas_ordenadas if col in df_tabla_visible.columns]]
         
