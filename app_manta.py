@@ -27,7 +27,6 @@ supabase = st.session_state.supabase
 # ===========================================================
 def obtener_acumulados(nodo):
     try:
-        # Se fuerza el refresco evitando almacenamiento en caché local de Streamlit
         res = supabase.table("acumulados_nodos").select("*").eq("nodo_id", nodo).execute()
         if res.data:
             return res.data[0]
@@ -53,8 +52,7 @@ def ejecutar_reset_nube(nodo):
 
 def cargar_datos_telemetria(nodo):
     try:
-        # Eliminamos @st.cache_data para que la lectura de la última fila 
-        # del MOSFET y consumo no se queden congeladas en cero
+        # Extraemos los datos ordenados de forma descendente (más recientes primero)
         res = supabase.table("telemetria_mantas")\
             .select("*")\
             .eq("nodo_id", nodo)\
@@ -64,7 +62,20 @@ def cargar_datos_telemetria(nodo):
         
         if res.data:
             df = pd.DataFrame(res.data)
-            df['created_at'] = pd.to_datetime(df['created_at'])
+            # Convertir a datetime garantizando manejo de zona horaria nativa
+            df['created_at'] = pd.to_datetime(df['created_at'], utc=True)
+            
+            # CORRECCIÓN: Convertir explícitamente a la zona horaria local de Chile
+            # Esto soluciona el desfase de horas entre la base de datos y la visualización
+            try:
+                df['created_at'] = df['created_at'].dt.tz_convert('America/Punta_Arenas')
+            except Exception:
+                # Fallback en caso de entornos sin tzdata cargado correctamente
+                df['created_at'] = df['created_at'].dt.tz_localize(None) - timedelta(hours=3)
+
+            # Devolvemos el dataframe ordenado cronológicamente (más antiguo a más reciente)
+            # Esto asegura que .iloc[-1] sea SIEMPRE el último dato real en el tiempo
+            df = df.sort_values('created_at').reset_index(drop=True)
             return df
     except Exception as e:
         st.error(f"Error descargando datos: {e}")
@@ -124,18 +135,16 @@ with st.sidebar:
 
 # --- DESPLIEGUE DE MÉTRICAS PRINCIPALES ---
 if nodo:
-    df_telemetria = cargar_datos_telemetria(nodo)
+    df_cronologico = cargar_datos_telemetria(nodo)
     
-    if not df_telemetria.empty:
-        # Ordenamos una copia cronológicamente para cálculos y gráficos de líneas
-        df_cronologico = df_telemetria.sort_values('created_at').reset_index(drop=True)
+    if not df_cronologico.empty:
+        # Al estar ordenado cronológicamente, el último índice es el dato más fresco del sensor
+        ultimas_lecturas = df_cronologico.iloc[-1] 
+        pwm_promedio = df_cronologico['duty_cycle'].mean()
+        current_pwm = int(ultimas_lecturas['duty_cycle'])
         
         # Cargar contadores persistentes en tiempo real
         datos_acumulados = obtener_acumulados(nodo)
-        
-        pwm_promedio = df_cronologico['duty_cycle'].mean()
-        ultimas_lecturas = df_cronologico.iloc[-1] 
-        current_pwm = int(ultimas_lecturas['duty_cycle'])
 
         # --- FILA 1: MÉTRICAS TÉRMICAS ---
         st.subheader("Monitoreo de Variables Térmicas")
@@ -185,8 +194,12 @@ if nodo:
         limite_hace_24_horas = ultima_estampa - timedelta(hours=24)
         df_ventana_grafico = df_cronologico[df_cronologico['created_at'] >= limite_hace_24_horas].copy()
         
-        # Remuestreo por minuto para suavizar líneas y optimizar memoria de la GPU web
-        df_ventana_grafico['minuto'] = df_ventana_grafico['created_at'].dt.floor('min')
+        # Eliminamos la información de zona horaria solo para que el motor de gráficos de Streamlit
+        # no genere conflictos de renderizado con Altair
+        df_ventana_grafico['created_at_visual'] = df_ventana_grafico['created_at'].dt.tz_localize(None)
+        
+        # Remuestreo por minuto para suavizar las curvas de telemetría
+        df_ventana_grafico['minuto'] = df_ventana_grafico['created_at_visual'].dt.floor('min')
         df_grafico_render = df_ventana_grafico.groupby('minuto').mean(numeric_only=True).reset_index()
 
         st.line_chart(
@@ -198,18 +211,19 @@ if nodo:
 
         st.markdown("---")
 
-        # --- FILA 4: TABLA DE VALORES HISTÓRICOS (REINCORPORADA) ---
+        # --- FILA 4: TABLA DE VALORES HISTÓRICOS (CORREGIDA Y ORDENADA DESCIENTE) ---
         st.subheader("📋 Registro de Datos Recientes (Telemetría Histórica)")
         
-        # Clonamos y formateamos el DataFrame original para una lectura tabular cómoda
-        df_tabla_visible = df_telemetria.copy()
+        # Creamos la tabla mostrando los datos más nuevos al principio para facilitar la auditoría visual
+        df_tabla_visible = df_cronologico.sort_values('created_at', ascending=False).copy()
+        
+        # Formateamos la estampa de tiempo local eliminando microsegundos para una visualización limpia
         df_tabla_visible['created_at'] = df_tabla_visible['created_at'].dt.strftime('%Y-%m-%d %H:%M:%S')
         
-        # Reordenamos las columnas para destacar las variables principales
+        # Selección y orden de columnas clave para el análisis en terreno
         columnas_ordenadas = ['created_at', 'temp_agua', 'temp_ambiente', 'setpoint', 'duty_cycle', 'nodo_id']
         df_tabla_visible = df_tabla_visible[[col for col in columnas_ordenadas if col in df_tabla_visible.columns]]
         
-        # Renderizado de la tabla interactiva de Streamlit
         st.dataframe(df_tabla_visible, use_container_width=True, hide_index=True)
 
         # --- FILA 5: EXPORTACIÓN DE HOJAS DE DATOS ---
