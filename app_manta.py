@@ -35,44 +35,49 @@ datos = supabase.table("telemetria_mantas").select("*").eq("nodo_id", nodo_sel).
 df = pd.DataFrame(datos.data)
 
 if not df.empty:
-    # 1. Convertir a datetime
-    df['created_at'] = pd.to_datetime(df['created_at'])
-    # 2. Ajustar a hora local de Punta Arenas (UTC-3)
-    df['created_at'] = df['created_at'] - timedelta(hours=3)
+    # 1. Convertir a datetime y restar 3 horas (UTC-3 Punta Arenas)
+    df['created_at'] = pd.to_datetime(df['created_at']) - timedelta(hours=3)
+    
+    # 2. Crear una columna de hora como string para el gráfico (evita desfases del navegador)
+    df['hora_str'] = df['created_at'].dt.strftime('%H:%M:%S')
+    
+    # 3. Establecer el índice para la tabla
     df = df.set_index('created_at')
-
-cfg = supabase.table("configuracion_nodos").select("*").eq("nodo_id", nodo_sel).single().execute().data
 
 # --- DASHBOARD ---
 st.title(f"Centro de Control: {nodo_sel}")
 
-# KPIs
 if not df.empty:
+    # KPIs
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Temp. Agua", f"{df['temp_agua'].iloc[-1]}°C")
     c2.metric("Temp. Amb.", f"{df['temp_ambiente'].iloc[-1]}°C")
+    
+    cfg = supabase.table("configuracion_nodos").select("*").eq("nodo_id", nodo_sel).single().execute().data
     c3.metric("Setpoint", f"{cfg['setpoint']}°C")
     c4.metric("Potencia PID", f"{df['duty_cycle'].iloc[-1]}%")
     
-    # Gráfico
+    # Gráfico Corregido: Usamos 'hora_str' como índice para el eje X
     st.subheader("📊 Gráfico de Rendimiento")
-    st.line_chart(df[['temp_agua', 'temp_ambiente', 'setpoint']])
+    df_grafico = df.set_index('hora_str')[['temp_agua', 'temp_ambiente', 'setpoint']]
+    st.line_chart(df_grafico)
 else:
     st.warning("No hay datos disponibles para el nodo y rango seleccionados.")
 
 # --- TABLA Y EXPORTACIÓN ---
 if not df.empty:
     st.subheader("📋 Tabla de Telemetría")
-    # Limpiar zona horaria para Excel
-    df_reporte = df.copy()
-    if df_reporte.index.tz is not None:
-        df_reporte.index = df_reporte.index.tz_localize(None)
+    
+    # Limpiar zona horaria para Excel (evita error ValueError)
+    df_reporte = df.reset_index()
+    if df_reporte['created_at'].dt.tz is not None:
+        df_reporte['created_at'] = df_reporte['created_at'].dt.tz_localize(None)
     
     st.dataframe(df_reporte, use_container_width=True)
     
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-        df_reporte.to_excel(writer, sheet_name='Reporte')
+        df_reporte.to_excel(writer, index=False, sheet_name='Reporte')
     st.download_button("📥 Descargar Excel", data=buffer, file_name=f"reporte_{nodo_sel}.xlsx")
 
 if st.button("🔄 Recargar"): st.rerun()
