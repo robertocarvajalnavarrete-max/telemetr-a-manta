@@ -6,8 +6,8 @@ import io
 
 # --- CONFIGURACIÓN ---
 st.set_page_config(page_title="Control Manta - Centro de Ingeniería", layout="wide")
-SUPABASE_URL = "TU_URL_AQUI"
-SUPABASE_KEY = "TU_KEY_AQUI"
+SUPABASE_URL = "SUPABASE_URL = "https://pkpcbvobkgnrvqkpamun.supabase.co""
+SUPABASE_KEY = "sb_publishable_8eE8fYlKG_Nl5864tYukKA_Cm9Fh2aV"
 COSTO_KWH = 0.15 # Ajusta según tu tarifa en CLP
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
