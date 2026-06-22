@@ -23,7 +23,7 @@ supabase = st.session_state.supabase
 
 
 # ===========================================================
-# 2. FUNCIONES AUXILIARES DE PERSISTENCIA (INDENTACIÓN CERO)
+# 2. FUNCIONES AUXILIARES DE PERSISTENCIA
 # ===========================================================
 def obtener_acumulados(nodo):
     try:
@@ -48,17 +48,18 @@ def ejecutar_reset_nube(nodo):
             "ultimo_reset_at": "now()"
         }).eq("nodo_id", nodo).execute()
     except Exception as e:
-        print(f"Error ejecutando reset: {e}")
+        print(f"Error executing reset: {e}")
 
 
 @st.cache_data(ttl=10)
 def cargar_datos_telemetria(nodo):
     try:
-        # Traemos un set amplio de datos para asegurar el historial de 24 horas
+        # CORRECCIÓN: En la librería de Supabase para Python, el orden descendente
+        # se especifica usando desc=True dentro de .order()
         res = supabase.table("telemetria_mantas")\
             .select("*")\
             .eq("nodo_id", nodo)\
-            .order("created_at", ascending=False)\
+            .order("created_at", desc=True)\
             .limit(25000)\
             .execute()
         
@@ -108,7 +109,7 @@ with st.sidebar:
         pass
 
     nuevo_sp = st.slider(
-        "Setpoint Objetivo Precisión (°C):",
+        "Setpoint Objetivo Precision (°C):",
         min_value=3.0,
         max_value=6.0,
         value=st.session_state.sp_local,
@@ -130,7 +131,7 @@ if nodo:
     df_cronologico_base = cargar_datos_telemetria(nodo)
     
     if not df_cronologico_base.empty:
-        # Cargar los contadores persistentes desde la nueva tabla
+        # Cargar los contadores persistentes desde la tabla de acumulados
         datos_acumulados = obtener_acumulados(nodo)
         
         pwm_promedio = df_cronologico_base['duty_cycle'].mean()
@@ -188,7 +189,7 @@ if nodo:
         
         # Aligerar el gráfico usando remuestreo por minuto para evitar lentitud
         df_ventana_grafico['minuto'] = df_ventana_grafico['created_at'].dt.floor('min')
-        df_grafico_render = df_ventana_grafico.groupby('minuto').mean().reset_index()
+        df_grafico_render = df_ventana_grafico.groupby('minuto').mean(numeric_only=True).reset_index()
 
         # Renderizar gráfico de línea nativo de Streamlit
         st.line_chart(
