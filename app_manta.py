@@ -16,7 +16,6 @@ st.set_page_config(
 SUPABASE_URL = "https://pkpcbvobkgnrvqkpamun.supabase.co"
 SUPABASE_KEY = "sb_publishable_8eE8fYlKG_Nl5864tYukKA_Cm9Fh2aV"
 
-# Inicializar cliente de la nube de forma segura
 if 'supabase' not in st.session_state:
     st.session_state.supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 supabase = st.session_state.supabase
@@ -28,7 +27,6 @@ supabase = st.session_state.supabase
 if 'autenticado' not in st.session_state:
     st.session_state.autenticado = False
 
-# Manejo seguro del inicio de sesión sin llamadas redundantes a rerun
 if not st.session_state.autenticado:
     st.markdown("<h2 style='text-align: center;'>Proyecto Manta - Control de Acceso</h2>", unsafe_allow_html=True)
     col_login_1, col_login_2, col_login_3 = st.columns([1, 2, 1])
@@ -53,43 +51,41 @@ if not st.session_state.autenticado:
 # ===========================================================
 # 3. FUNCIONES AUXILIARES DE PERSISTENCIA Y TELEMETRÍA
 # ===========================================================
-# Inicializar la variable de reset local en el estado de la sesión si no existe
-if 'local_reset_time' not in st.session_state:
-    st.session_state.local_reset_time = None
-
 def calcular_consumo_dinamico(df_datos, desde_fecha=None):
     """
-    Calcula el consumo eléctrico de forma matemática en base al historial de PWM.
-    Evita la dependencia estricta de columnas precalculadas en la base de datos.
-    Asume una potencia nominal estimada para la manta de 60W a 12V (Ajustable).
+    Calcula el consumo eléctrico acumulado integrando los puntos de telemetría.
+    Si se pasa 'desde_fecha', solo acumula los registros posteriores a ese hito.
     """
     if df_datos.empty:
         return 0.0, 0.0
         
     df_trabajo = df_datos.copy()
+    
+    # Filtrar cronológicamente si existe un reset registrado
     if desde_fecha is not None:
-        df_trabajo = df_trabajo[df_trabajo['created_at'] > desde_fecha]
+        # Asegurar compatibilidad de zonas horarias (Mismo timezone que los datos)
+        if df_trabajo['created_at'].dt.tz is not None and desde_fecha.tzinfo is None:
+            desde_fecha = desde_fecha.replace(tzinfo=df_trabajo['created_at'].dt.tz)
+        df_trabajo = df_trabajo[df_trabajo['created_at'] >= desde_fecha]
         
     if df_trabajo.shape[0] < 2:
         return 0.0, 0.0
         
     df_trabajo = df_trabajo.sort_values('created_at')
     
-    # Parámetros eléctricos del ensayo
-    POTENCIA_MANTA_KW = 0.060  # 60 Watts nominales convertidos a kW
-    COSTO_KWH_CLP = 150.0      # Costo promedio por kWh en Chile
+    POTENCIA_MANTA_KW = 0.060  # 60 Watts nominales
+    COSTO_KWH_CLP = 150.0      # Costo promedio energía
     
     kwh_acumulado = 0.0
     
-    # Integración temporal de la energía consumida punto a punto
     for i in range(1, len(df_trabajo)):
         t1 = df_trabajo.iloc[i-1]['created_at']
         t2 = df_trabajo.iloc[i]['created_at']
         delta_horas = (t2 - t1).total_seconds() / 3600.0
         
-        # Validar que no existan saltos temporales huérfanos excesivos (máx 10 min entre muestras)
+        # Ignorar vacíos temporales huérfanos por desconexión
         if delta_horas > 0.16:
-            delta_horas = 0.016  # Forzar a intervalo estándar (~1 minuto)
+            delta_horas = 0.016  
             
         pwm = float(df_trabajo.iloc[i]['duty_cycle'] or 0.0) / 100.0
         kwh_acumulado += (POTENCIA_MANTA_KW * pwm) * delta_horas
@@ -97,62 +93,65 @@ def calcular_consumo_dinamico(df_datos, desde_fecha=None):
     costo_clp = kwh_acumulado * COSTO_KWH_CLP
     return kwh_acumulado, costo_clp
 
-def obtener_acumulados(nodo, df_respaldo=None):
-    # Inicialización por defecto en caso de fallo absoluto de red
+
+def obtener_acumulados_y_metadata(nodo, df_telemetria):
+    """
+    Consulta la metadata del nodo en Supabase para obtener la fecha del último reset
+    y calcula de forma robusta los consumos absolutos y del ensayo actual.
+    """
+    # Valores base por defecto
     kwh_total, costo_total = 0.0, 0.0
     kwh_ensayo, costo_ensayo = 0.0, 0.0
+    fecha_ultimo_reset = None
 
-    # 1. Intentar calcular los consumos dinámicamente usando el dataframe actual de telemetría
-    if df_respaldo is not None and not df_respaldo.empty:
-        kwh_total, costo_total = calcular_consumo_dinamico(df_respaldo)
+    # 1. Obtener la estampa de tiempo del último reset real guardado en la nube
+    try:
+        res = supabase.table("acumulados_nodos").select("ultimo_reset_at").eq("nodo_id", nodo).execute()
+        if res.data and len(res.data) > 0:
+            raw_reset = res.data[0].get("ultimo_reset_at")
+            if raw_reset:
+                fecha_ultimo_reset = pd.to_datetime(raw_reset)
+    except Exception as e:
+        print(f"Error al recuperar fecha de reset: {e}")
+
+    # 2. Calcular consumos basados en el dataframe de telemetría cargado
+    if not df_telemetria.empty:
+        # Consumo Histórico Completo
+        kwh_total, costo_total = calcular_consumo_dinamico(df_telemetria)
         
-        if st.session_state.local_reset_time is not None:
-            kwh_ensayo, costo_ensayo = calcular_consumo_dinamico(df_respaldo, desde_fecha=st.session_state.local_reset_time)
+        # Consumo Persistente del Ensayo (Desde el reset en la nube)
+        if fecha_ultimo_reset is not None:
+            kwh_ensayo, costo_ensayo = calcular_consumo_dinamico(df_telemetria, desde_fecha=fecha_ultimo_reset)
         else:
             kwh_ensayo, costo_ensayo = kwh_total, costo_total
-            
-        return {
-            "kwh_historico_total": kwh_total,
-            "costo_historico_total": costo_total,
-            "kwh_desde_reset": kwh_ensayo,
-            "costo_desde_reset": costo_ensayo
-        }
-
-    # 2. Respaldo relacional en la base de datos si el dataframe viene vacío
-    try:
-        res = supabase.table("acumulados_nodos").select("*").eq("nodo_id", nodo).execute()
-        if res.data and len(res.data) > 0:
-            raw_data = res.data[0]
-            return {
-                "kwh_historico_total": float(raw_data.get("kwh_historico_total", 0.0) or 0.0),
-                "costo_historico_total": float(raw_data.get("costo_historico_total", 0.0) or 0.0),
-                "kwh_desde_reset": float(raw_data.get("kwh_desde_reset", 0.0) or 0.0),
-                "costo_desde_reset": float(raw_data.get("costo_desde_reset", 0.0) or 0.0)
-            }
-    except Exception as e:
-        print(f"Error consultando tabla acumulados: {e}")
 
     return {
-        "kwh_historico_total": 0.0, 
-        "costo_historico_total": 0.0, 
-        "kwh_desde_reset": 0.0, 
-        "costo_desde_reset": 0.0
+        "kwh_historico_total": kwh_total,
+        "costo_historico_total": costo_total,
+        "kwh_desde_reset": kwh_ensayo,
+        "costo_desde_reset": costo_ensayo,
+        "ultimo_reset_at": fecha_ultimo_reset
     }
 
-def ejecutar_reset_nube(nodo):
+
+def ejecutar_reset_nube(nodo, estampa_tiempo):
+    """
+    Guarda de manera definitiva el instante exacto del reset en la base de datos relacional.
+    """
     try:
+        # Convertir estampa de tiempo a formato ISO string para la base de datos
+        iso_timestamp = estampa_tiempo.isoformat()
         supabase.table("acumulados_nodos").update({
             "kwh_desde_reset": 0.0,
             "costo_desde_reset": 0.0,
-            "ultimo_reset_at": "now()"
+            "ultimo_reset_at": iso_timestamp
         }).eq("nodo_id", nodo).execute()
     except Exception as e:
-        print(f"Error ejecutando reset en Supabase: {e}")
+        st.error(f"Error crítico al guardar reset en Supabase: {e}")
 
 
 def cargar_datos_telemetria(nodo):
     try:
-        # Se corrigió el ordenamiento nativo compatible con la API de Supabase en Python
         res = supabase.table("telemetria_mantas")\
             .select("*")\
             .eq("nodo_id", nodo)\
@@ -179,7 +178,6 @@ def cargar_datos_telemetria(nodo):
 # ===========================================================
 # 4. INTERFAZ DE USUARIO (DASHBOARD PRINCIPAL)
 # ===========================================================
-# Título y cabecera con botón de refresco integrado
 col_title, col_refresh = st.columns([4, 1])
 
 with col_title:
@@ -200,17 +198,12 @@ with st.sidebar:
     st.header("Sesión Activa")
     if st.button("Cerrar Sesión", use_container_width=True):
         st.session_state.autenticado = False
-        st.session_state.local_reset_time = None
         st.info("Sesión cerrada correctamente.")
         time.sleep(0.5)
         st.rerun()
     
     st.markdown("---")
-    nodo = st.selectbox(
-        "Seleccionar Nodo a Monitorear:",
-        ["pi_lab_manta"],
-        index=0
-    )
+    nodo = st.selectbox("Seleccionar Nodo a Monitorear:", ["pi_lab_manta"], index=0)
     
     st.markdown("---")
     st.header("Configuración de Banda Térmica")
@@ -252,10 +245,10 @@ if nodo:
         pwm_promedio = df_cronologico['duty_cycle'].mean() if 'duty_cycle' in df_cronologico.columns else df_cronologico['duty_cycle_mean'].mean()
         current_pwm = int(ultimas_lecturas.get('duty_cycle', 0))
         
-        # Obtener acumulados procesando el estado de el dataframe dinámico
-        datos_acumulados = obtener_acumulados(nodo, df_cronologico)
+        # Recuperar la información histórica y de reset persistente desde Supabase
+        datos_acumulados = obtener_acumulados_y_metadata(nodo, df_cronologico)
 
-        # --- FILA 1: MÉTRICAS TÉRMICAS ---
+        # --- FILA 1: VARIABLES TÉRMICAS ---
         st.subheader("Monitoreo de Variables Térmicas")
         col1, col2, col3, col4 = st.columns(4)
         with col1:
@@ -269,7 +262,7 @@ if nodo:
 
         st.markdown("---")
 
-        # --- FILA 2: MÉTRICAS ENERGÉTICAS ---
+        # --- FILA 2: VARIABLES ENERGÉTIAS CON RESET REAL ---
         st.subheader("Eficiencia y Consumo Eléctrico")
         cole1, col_ens1, col_ens2, cole4 = st.columns(4)
         with cole1:
@@ -281,20 +274,23 @@ if nodo:
         with cole4:
             st.metric(label="Carga Promedio de la Manta", value=f"{pwm_promedio:.1f} %")
 
-        # --- FILA 2.5: SECCIÓN DE BORRADO E HISTÓRICO GLOBAL ---
+        # --- FILA 2.5: PIE DE PÁGINA METADATA GLOBAL ---
         col_hist1, col_hist2, col_btn = st.columns([2, 2, 1])
         with col_hist1:
             st.caption(f"🌍 **Acumulado Histórico Total del Nodo:** {datos_acumulados['kwh_historico_total']:.5f} kWh")
         with col_hist2:
-            st.caption(f"💰 **Costo Histórico Total:** ${datos_acumulados['costo_historico_total']:.2f} CLP")
+            if datos_acumulados['ultimo_reset_at']:
+                st.caption(f"⏱️ **Último reinicio de ensayo:** {datos_acumulados['ultimo_reset_at'].strftime('%Y-%m-%d %H:%M:%S')}")
+            else:
+                st.caption("⏱️ **Último reinicio de ensayo:** Sin registros previos")
         with col_btn:
             if st.button("⚠️ Resetear Cuenta Ensayo", use_container_width=True):
-                # 1. Resetear valores en la tabla espejo de la nube
-                ejecutar_reset_nube(nodo)
-                # 2. Guardar estampa de tiempo local exacta para el corte de datos en la UI
-                st.session_state.local_reset_time = df_cronologico['created_at'].max()
-                st.toast("Contador de ensayo enviado a cero.", icon="🔄")
-                time.sleep(0.8)
+                # 1. Obtener el punto en el tiempo del último registro de telemetría disponible
+                instante_corte = df_cronologico['created_at'].max()
+                # 2. Impactar de forma persistente en Supabase la fecha del reset
+                ejecutar_reset_nube(nodo, instante_corte)
+                st.toast("Hito de reset guardado de manera permanente en la nube.", icon="🔄")
+                time.sleep(0.6)
                 st.rerun()
 
         st.markdown("---")
@@ -319,17 +315,16 @@ if nodo:
 
         st.markdown("---")
 
-        # --- FILA 4: TABLA DE VALORES HISTÓRICOS ---
+        # --- FILA 4: REGISTRO RECIENTE ---
         st.subheader("📋 Registro de Datos Recientes (Telemetría Histórica)")
         df_tabla_visible = df_cronologico.sort_values('created_at', ascending=False).copy()
         df_tabla_visible['created_at'] = df_tabla_visible['created_at'].dt.strftime('%Y-%m-%d %H:%M:%S')
         
         columnas_ordenadas = ['created_at', 'temp_agua', 'temp_ambiente', 'setpoint', 'duty_cycle', 'nodo_id']
         df_tabla_visible = df_tabla_visible[[col for col in columnas_ordenadas if col in df_tabla_visible.columns]]
-        
         st.dataframe(df_tabla_visible, use_container_width=True, hide_index=True)
 
-        # --- FILA 5: EXPORTACIÓN DE HOJAS DE DATOS ---
+        # --- FILA 5: EXPORTACIÓN ---
         st.subheader("Descarga de Datos")
         csv_data = df_tabla_visible.to_csv(index=False).encode('utf-8')
         st.download_button(
@@ -339,4 +334,4 @@ if nodo:
             mime="text/csv"
         )
     else:
-        st.warning("⚠️ No se encontraron registros de telemetría para este nodo en la base de datos.")
+        st.warning("⚠️ No se encontraron registros de telemetría para este nodo.")
