@@ -73,4 +73,11 @@ if not df.empty:
     df_reporte = df.reset_index()
     if df_reporte['created_at'].dt.tz is not None:
         df_reporte['created_at'] = df_reporte['created_at'].dt.tz_localize(None)
-    st.dataframe(
+    st.dataframe(df_reporte, use_container_width=True)
+    
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+        df_reporte.to_excel(writer, index=False, sheet_name='Reporte')
+    st.download_button("📥 Descargar Excel", data=buffer, file_name=f"reporte_{nodo_sel}.xlsx")
+
+if st.button("🔄 Recargar"): st.rerun()
