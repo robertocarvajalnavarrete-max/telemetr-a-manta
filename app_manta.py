@@ -28,24 +28,25 @@ supabase = st.session_state.supabase
 if 'autenticado' not in st.session_state:
     st.session_state.autenticado = False
 
-def validar_credenciales():
-    if st.session_state["usuario_ingresado"] == "admin" and st.session_state["clave_ingresada"] == "manta2026":
-        st.session_state.autenticado = True
-        st.success("Acceso concedido.")
-        time.sleep(0.5)
-        st.rerun()
-    else:
-        st.error("Credenciales incorrectas. Intente nuevamente.")
-
+# Manejo seguro del inicio de sesión sin llamadas redundantes a rerun
 if not st.session_state.autenticado:
     st.markdown("<h2 style='text-align: center;'>Proyecto Manta - Control de Acceso</h2>", unsafe_allow_html=True)
     col_login_1, col_login_2, col_login_3 = st.columns([1, 2, 1])
     
     with col_login_2:
         with st.form("formulario_login"):
-            st.text_input("Usuario de Red:", key="usuario_ingresado")
-            st.text_input("Contraseña Operador:", type="password", key="clave_ingresada")
-            st.form_submit_button("Ingresar al Panel", on_click=validar_credenciales)
+            usuario = st.text_input("Usuario de Red:", key="usuario_ingresado")
+            clave = st.text_input("Contraseña Operador:", type="password", key="clave_ingresada")
+            boton_ingresar = st.form_submit_button("Ingresar al Panel", use_container_width=True)
+            
+            if boton_ingresar:
+                if usuario == "admin" and clave == "manta2026":
+                    st.session_state.autenticado = True
+                    st.success("Acceso concedido.")
+                    time.sleep(0.4)
+                    st.rerun()
+                else:
+                    st.error("Credenciales incorrectas. Intente nuevamente.")
     st.stop()
 
 
@@ -137,7 +138,7 @@ def ejecutar_reset_nube(nodo):
             "ultimo_reset_at": "now()"
         }).eq("nodo_id", nodo).execute()
     except Exception as e:
-        print(f"Error ejecutando reset en Supabase: {e}")
+        print(f"Error executing reset in Supabase: {e}")
 
 
 def cargar_datos_telemetria(nodo):
@@ -168,8 +169,20 @@ def cargar_datos_telemetria(nodo):
 # ===========================================================
 # 4. INTERFAZ DE USUARIO (DASHBOARD PRINCIPAL)
 # ===========================================================
-st.title("Panel de Monitoreo Centralizado Proyecto Manta")
-st.caption("Monitoreo térmico en tiempo real para nodos en terreno")
+# Título y cabecera con botón de refresco integrado
+col_title, col_refresh = st.columns([4, 1])
+
+with col_title:
+    st.title("Panel de Monitoreo Centralizado Proyecto Manta")
+    st.caption("Monitoreo térmico en tiempo real para nodos en terreno")
+
+with col_refresh:
+    st.markdown("<br>", unsafe_allow_html=True) # Espaciador visual para alinear con el título
+    if st.button("🔄 Actualizar Datos", use_container_width=True):
+        st.toast("Telemetría y consumos actualizados.", icon="📥")
+        time.sleep(0.3)
+        st.rerun()
+
 st.markdown("---")
 
 # --- BARRA LATERAL DE CONTROL ---
