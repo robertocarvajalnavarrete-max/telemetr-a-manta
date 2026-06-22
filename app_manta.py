@@ -29,7 +29,6 @@ if 'autenticado' not in st.session_state:
     st.session_state.autenticado = False
 
 def validar_credenciales():
-    # Validación simple local; puedes adaptarla si requieres verificación por BD
     if st.session_state["usuario_ingresado"] == "admin" and st.session_state["clave_ingresada"] == "manta2026":
         st.session_state.autenticado = True
         st.success("Acceso concedido.")
@@ -47,13 +46,55 @@ if not st.session_state.autenticado:
             st.text_input("Usuario de Red:", key="usuario_ingresado")
             st.text_input("Contraseña Operador:", type="password", key="clave_ingresada")
             st.form_submit_button("Ingresar al Panel", on_click=validar_credenciales)
-    st.stop()  # Detiene la ejecución completa si el usuario no está validado
+    st.stop()
 
 
 # ===========================================================
 # 3. FUNCIONES AUXILIARES DE PERSISTENCIA Y TELEMETRÍA
 # ===========================================================
+# Inicializar la variable de reset local en el estado de la sesión si no existe
+if 'local_reset_time' not in st.session_state:
+    st.session_state.local_reset_time = None
+
 def obtener_acumulados(nodo, df_respuesto=None):
+    # Si se acaba de presionar el botón de reset, forzar valores en cero para el ensayo actual
+    if st.session_state.local_reset_time is not None:
+        # Intentamos traer el histórico total real de la nube si está disponible
+        kwh_total = 0.00920
+        costo_total = 1.38
+        try:
+            res = supabase.table("acumulados_nodos").select("kwh_historico_total", "costo_historico_total").eq("nodo_id", nodo).execute()
+            if res.data and len(res.data) > 0:
+                kwh_total = float(res.data[0].get("kwh_historico_total", 0.00920) or 0.00920)
+                costo_total = float(res.data[0].get("costo_historico_total", 1.38) or 1.38)
+        except:
+            pass
+            
+        # Filtrar el dataframe de respaldo para ver si ya llegaron lecturas nuevas post-reset
+        kwh_ensayo = 0.0
+        costo_ensayo = 0.0
+        if df_respuesto is not None and not df_respuesto.empty:
+            df_nuevos = df_respuesto[df_respuesto['created_at'] > st.session_state.local_reset_time]
+            if not df_nuevos.empty:
+                # Si ya hay datos nuevos, calculamos la diferencia respecto al punto de corte
+                lectura_inicial = df_nuevos.iloc[0]
+                lectura_actual = df_nuevos.iloc[-1]
+                
+                kwh_base = float(lectura_inicial.get('kwh_acumulado', 0.0) or lectura_inicial.get('consumo', 0.0) or 0.0)
+                kwh_ahora = float(lectura_actual.get('kwh_acumulado', 0.0) or lectura_actual.get('consumo', 0.0) or 0.0)
+                kwh_ensayo = max(0.0, kwh_ahora - kwh_base)
+                
+                costo_base = float(lectura_inicial.get('costo_estimado', 0.0) or lectura_inicial.get('costo', 0.0) or 0.0)
+                costo_ahora = float(lectura_actual.get('costo_estimado', 0.0) or lectura_actual.get('costo', 0.0) or 0.0)
+                costo_ensayo = max(0.0, costo_ahora - costo_base)
+
+        return {
+            "kwh_historico_total": kwh_total,
+            "costo_historico_total": costo_total,
+            "kwh_desde_reset": kwh_ensayo,
+            "costo_desde_reset": costo_ensayo
+        }
+
     try:
         res = supabase.table("acumulados_nodos").select("*").eq("nodo_id", nodo).execute()
         if res.data and len(res.data) > 0:
@@ -67,11 +108,9 @@ def obtener_acumulados(nodo, df_respuesto=None):
     except Exception as e:
         print(f"Error consultando acumulados relacionales: {e}")
     
-    # FALLBACK DINÁMICO: Si la tabla relacional falla o está vacía, extraemos del dataframe
     if df_respuesto is not None and not df_respuesto.empty:
         try:
             ultimo_registro = df_respuesto.iloc[-1]
-            # Mapeo compatible con campos nativos de telemetría (kwh_acumulado o similar si existen)
             kwh_calc = float(ultimo_registro.get('kwh_acumulado', 0.0) or ultimo_registro.get('consumo', 0.0) or 0.00920)
             costo_calc = float(ultimo_registro.get('costo_estimado', 0.0) or ultimo_registro.get('costo', 0.0) or 1.38)
             return {
@@ -98,7 +137,7 @@ def ejecutar_reset_nube(nodo):
             "ultimo_reset_at": "now()"
         }).eq("nodo_id", nodo).execute()
     except Exception as e:
-        print(f"Error ejecutando reset: {e}")
+        print(f"Error ejecutando reset en Supabase: {e}")
 
 
 def cargar_datos_telemetria(nodo):
@@ -138,6 +177,7 @@ with st.sidebar:
     st.header("Sesión Activa")
     if st.button("Cerrar Sesión", use_container_width=True):
         st.session_state.autenticado = False
+        st.session_state.local_reset_time = None
         st.info("Sesión cerrada correctamente.")
         time.sleep(0.5)
         st.rerun()
@@ -189,7 +229,7 @@ if nodo:
         pwm_promedio = df_cronologico['duty_cycle'].mean() if 'duty_cycle' in df_cronologico.columns else df_cronologico['duty_cycle_mean'].mean()
         current_pwm = int(ultimas_lecturas.get('duty_cycle', 0))
         
-        # Carga dinámica pasando el dataframe como respaldo si no hay registros en la tabla espejo
+        # Obtener acumulados procesando el estado de reset local
         datos_acumulados = obtener_acumulados(nodo, df_cronologico)
 
         # --- FILA 1: MÉTRICAS TÉRMICAS ---
@@ -226,9 +266,12 @@ if nodo:
             st.caption(f"💰 **Costo Histórico Total:** ${datos_acumulados['costo_historico_total']:.2f} CLP")
         with col_btn:
             if st.button("⚠️ Resetear Cuenta Ensayo", use_container_width=True):
+                # 1. Resetear valores en la tabla espejo de la nube
                 ejecutar_reset_nube(nodo)
+                # 2. Guardar estampa de tiempo local exacta para el corte de datos en la UI
+                st.session_state.local_reset_time = df_cronologico['created_at'].max()
                 st.toast("Contador de ensayo reiniciado con éxito.", icon="🔄")
-                time.sleep(1)
+                time.sleep(0.8)
                 st.rerun()
 
         st.markdown("---")
