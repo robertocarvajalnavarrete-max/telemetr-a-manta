@@ -64,7 +64,6 @@ if verificar_password():
     # --- FUNCIONES DE BASE DE DATOS (CORREGIDAS) ---
     def obtener_setpoint_nube(nodo):
         try:
-            # CORRECCIÓN: Se cambió "limite_minimo" por "setpoint_config"
             res = supabase.table("configuracion_nodos").select("setpoint_config").eq("nodo_id", nodo).execute()
             if res.data:
                 return float(res.data[0]["setpoint_config"])
@@ -74,7 +73,6 @@ if verificar_password():
 
     def actualizar_setpoint_nube(nodo, nuevo_sp):
         try:
-            # CORRECCIÓN: Se cambió "limite_minimo" por "setpoint_config"
             supabase.table("configuracion_nodos").update({
                 "setpoint_config": nuevo_sp, 
                 "updated_at": "now()"
@@ -82,13 +80,17 @@ if verificar_password():
         except Exception as e:
             st.sidebar.error(f"No se pudo actualizar la nube: {e}")
 
+    # MODIFICADO: Límite extendido a 25.000 filas para abarcar más de 24 horas continuas
     @st.cache_data(ttl=60, show_spinner=False)
     def cargar_datos():
         try:
-            respuesta = supabase.table("telemetria_mantas").select("*").order("created_at", desc=True).limit(5000).execute()
+            respuesta = supabase.table("telemetria_mantas").select("*").order("created_at", desc=True).limit(25000).execute()
             df = pd.DataFrame(respuesta.data)
             if not df.empty:
                 df['created_at'] = pd.to_datetime(df['created_at'])
+                # OPTIMIZACIÓN: Si la data es masiva, tomamos 1 muestra cada 30 seg (1 de cada 6 filas) para agilizar Plotly
+                if len(df) > 5000:
+                    df = df.iloc[::6].reset_index(drop=True)
             return df
         except Exception as e:
             st.error(f"Error al traer datos de telemetría: {e}")
@@ -102,7 +104,6 @@ if verificar_password():
         nodos_disponibles = df_inicial['nodo_id'].unique()
         nodo_seleccionado = st.sidebar.selectbox("Seleccionar Nodo a Monitorear:", nodos_disponibles)
         
-        # Inicialización controlada
         if "nodo_actual" not in st.session_state or st.session_state.nodo_actual != nodo_seleccionado:
             st.session_state.nodo_actual = nodo_seleccionado
             st.session_state.sp_local = obtener_setpoint_nube(nodo_seleccionado)
@@ -118,7 +119,6 @@ if verificar_password():
             step=0.1
         )
         
-        # --- DETECCIÓN DE CAMBIO DE SETPOINT ---
         if nuevo_sp != st.session_state.sp_local:
             actualizar_setpoint_nube(nodo_seleccionado, nuevo_sp)
             st.session_state.sp_local = nuevo_sp  
@@ -198,12 +198,12 @@ if verificar_password():
 
                 st.markdown("---")
 
-                # --- GRÁFICOS ---
+                # --- MODIFICADO: FILTRO PARA COMPRENDER 24 HORAS COMPLETAS EN EL GRÁFICO ---
                 ultima_estampa = df_procesado_cronologico['created_at'].max()
-                limite_hace_10_horas = ultima_estampa - timedelta(hours=10)
-                df_ventana_grafico = df_procesado_cronologico[df_procesado_cronologico['created_at'] >= limite_hace_10_horas]
+                limite_hace_24_horas = ultima_estampa - timedelta(hours=24)
+                df_ventana_grafico = df_procesado_cronologico[df_procesado_cronologico['created_at'] >= limite_hace_24_horas]
 
-                st.subheader(f"📈 Curva Térmica e Historial PWM - {nodo}")
+                st.subheader(f"📈 Curva Térmica e Historial PWM - {nodo} (Últimas 24 Horas)")
                 
                 if not df_ventana_grafico.empty:
                     fig = go.Figure()
@@ -219,7 +219,6 @@ if verificar_password():
                         x=df_ventana_grafico['created_at'], y=df_ventana_grafico['temp_ambiente'],
                         mode='lines', name='Temperatura Ambiente', line=dict(color='#2ca02c', width=1.5)
                     ))
-                   
 
                     fig.update_layout(
                         template="plotly_dark",
