@@ -29,7 +29,7 @@ cfg = next(n for n in nodos_raw.data if n['nodo_id'] == nodo_sel)
 
 nuevo_sp = st.sidebar.number_input("Setpoint (°C):", value=float(cfg['setpoint']), step=0.1)
 potencia_manta = st.sidebar.number_input("Potencia Manta (Watts):", value=13, step=50)
-costo_kwh = st.sidebar.number_input("Costo CLP/kWh:", value=150.0, step=1.0)
+costo_kwh = st.sidebar.number_input("Costo CLP/kWh:", value=120.0, step=1.0)
 
 if st.sidebar.button("Guardar Configuración"):
     supabase.table("configuracion_nodos").update({"setpoint": nuevo_sp}).eq("nodo_id", nodo_sel).execute()
