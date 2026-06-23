@@ -28,7 +28,7 @@ nodo_sel = st.sidebar.selectbox("Nodo:", nodo_nombres)
 cfg = next(n for n in nodos_raw.data if n['nodo_id'] == nodo_sel)
 
 nuevo_sp = st.sidebar.number_input("Setpoint (°C):", value=float(cfg['setpoint']), step=0.1)
-potencia_manta = st.sidebar.number_input("Potencia Manta (Watts):", value=500, step=50)
+potencia_manta = st.sidebar.number_input("Potencia Manta (Watts):", value=13, step=50)
 costo_kwh = st.sidebar.number_input("Costo CLP/kWh:", value=150.0, step=1.0)
 
 if st.sidebar.button("Guardar Configuración"):
