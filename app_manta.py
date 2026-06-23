@@ -41,11 +41,22 @@ st.sidebar.header("📅 Rango de Consulta")
 dias = st.sidebar.number_input("Días hacia atrás:", min_value=1, value=7)
 fecha_inicio = datetime.now() - timedelta(days=dias)
 
-# --- LÓGICA DE DATOS ---
-datos = supabase.table("telemetria_mantas").select("*").eq("nodo_id", nodo_sel).gte("created_at", fecha_inicio.isoformat()).execute()
+# --- LÓGICA DE DATOS (CORREGIDA) ---
+# Usamos order y limit para traer los datos más nuevos y superar el límite de 1000
+datos = supabase.table("telemetria_mantas")\
+    .select("*")\
+    .eq("nodo_id", nodo_sel)\
+    .gte("created_at", fecha_inicio.isoformat())\
+    .order("created_at", desc=True)\
+    .limit(5000)\
+    .execute()
+
 df = pd.DataFrame(datos.data)
 
 if not df.empty:
+    # Ordenamos de forma ascendente para que el gráfico se dibuje correctamente en el tiempo
+    df = df.sort_values('created_at', ascending=True)
+    
     df['created_at'] = pd.to_datetime(df['created_at']) - timedelta(hours=3)
     df['consumo_kwh'] = (potencia_manta * (df['duty_cycle'].fillna(0)/100) * (10/3600)) / 1000
     df['costo_clp'] = df['consumo_kwh'] * costo_kwh
@@ -68,14 +79,5 @@ if not df.empty:
                              var_name='Variable', value_name='Valor')
     
     fig = px.line(df_melted, x='hora_str', y='Valor', color='Variable')
-    # Fijamos el eje Y de 0 a 10 para evitar distorsiones al hacer zoom
-    fig.update_yaxes(range=[0, 10], autorange=False) 
-    
-    st.plotly_chart(fig, use_container_width=True)
-    
-    st.subheader("📋 Tabla de Telemetría")
-    st.dataframe(df.reset_index(drop=True), use_container_width=True)
-else:
-    st.warning("No hay registros disponibles.")
-
-if st.button("🔄 Recargar"): st.rerun()
+    # Fijamos el eje Y para evitar que se invierta o distorsione al hacer zoom
+    fig.update
