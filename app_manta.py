@@ -80,4 +80,14 @@ if not df.empty:
     
     fig = px.line(df_melted, x='hora_str', y='Valor', color='Variable')
     # Fijamos el eje Y para evitar que se invierta o distorsione al hacer zoom
-    fig.update
+    fig.update_yaxes(range=[0, 10], autorange=False) 
+    
+    st.plotly_chart(fig, use_container_width=True)
+    
+    st.subheader("📋 Tabla de Telemetría")
+    # Mostramos los datos con los más recientes arriba
+    st.dataframe(df.sort_values('created_at', ascending=False), use_container_width=True)
+else:
+    st.warning("No hay registros disponibles. Verifica si el script de la Raspberry está corriendo.")
+
+if st.button("🔄 Recargar"): st.rerun()
