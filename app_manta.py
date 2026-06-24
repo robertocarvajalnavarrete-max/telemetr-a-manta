@@ -79,7 +79,7 @@ if not df.empty:
     df_melted = df.melt(id_vars=['hora_str'], value_vars=['temp_agua', 'temp_ambiente', 'setpoint'], 
                           var_name='Variable', value_name='Valor')
     fig = px.line(df_melted, x='hora_str', y='Valor', color='Variable')
-    fig.update_yaxes(range=[0, 10], autorange=False) 
+    fig.update_yaxes(autorange=True) 
     st.plotly_chart(fig, use_container_width=True)
     
     st.subheader("📋 Tabla de Telemetría")
