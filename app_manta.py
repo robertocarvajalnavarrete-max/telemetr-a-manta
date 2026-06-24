@@ -25,16 +25,9 @@ st.sidebar.header("⚙️ Configuración")
 nodos_raw = supabase.table("configuracion_nodos").select("*").execute()
 nodo_nombres = [n['nodo_id'] for n in nodos_raw.data]
 nodo_sel = st.sidebar.selectbox("Nodo:", nodo_nombres)
-cfg = next(n for n in nodos_raw.data if n['nodo_id'] == nodo_sel)
 
-nuevo_sp = st.sidebar.number_input("Setpoint (°C):", value=float(cfg['setpoint']), step=0.1)
 potencia_manta = st.sidebar.number_input("Potencia Manta (Watts):", value=13, step=50)
 costo_kwh = st.sidebar.number_input("Costo CLP/kWh:", value=120.0, step=1.0)
-
-if st.sidebar.button("Guardar Configuración"):
-    supabase.table("configuracion_nodos").update({"setpoint": nuevo_sp}).eq("nodo_id", nodo_sel).execute()
-    st.sidebar.success("Actualizado")
-    st.rerun()
 
 st.sidebar.header("📅 Rango de Consulta")
 dias = st.sidebar.number_input("Días hacia atrás:", min_value=1, value=7)
@@ -53,7 +46,8 @@ df = pd.DataFrame(datos.data)
 
 if not df.empty:
     df = df.sort_values('created_at', ascending=True)
-    df['created_at'] = pd.to_datetime(df['created_at']) - timedelta(hours=3)
+    # Corrección horaria precisa a Magallanes
+    df['created_at'] = pd.to_datetime(df['created_at'], utc=True).dt.tz_convert('America/Punta_Arenas')
     df['consumo_kwh'] = (potencia_manta * (df['duty_cycle'].fillna(0)/100) * (10/3600)) / 1000
     df['costo_clp'] = df['consumo_kwh'] * costo_kwh
     df['hora_str'] = df['created_at'].dt.strftime('%d/%m %H:%M:%S')
@@ -62,7 +56,6 @@ if not df.empty:
 st.title(f"Centro de Control: {nodo_sel}")
 
 if not df.empty:
-    # Indicador de estado de flujo
     es_flujo = df['flujo_detectado'].iloc[-1]
     if es_flujo:
         st.warning("⚠️ ¡Flujo de agua detectado! Manta en reposo (Ahorro activo).")
@@ -77,13 +70,12 @@ if not df.empty:
     
     st.subheader("📊 Gráfico de Rendimiento")
     df_melted = df.melt(id_vars=['hora_str'], value_vars=['temp_agua', 'temp_ambiente', 'setpoint'], 
-                          var_name='Variable', value_name='Valor')
+                        var_name='Variable', value_name='Valor')
     fig = px.line(df_melted, x='hora_str', y='Valor', color='Variable')
     fig.update_yaxes(autorange=True) 
     st.plotly_chart(fig, use_container_width=True)
     
     st.subheader("📋 Tabla de Telemetría")
-    # Mostramos los datos con la nueva columna explícita
     columnas_ordenadas = ['created_at', 'temp_agua', 'temp_ambiente', 'setpoint', 'duty_cycle', 'flujo_detectado', 'consumo_kwh']
     st.dataframe(df.sort_values('created_at', ascending=False)[columnas_ordenadas], use_container_width=True)
 else:
