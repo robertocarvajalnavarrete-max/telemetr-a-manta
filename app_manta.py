@@ -51,7 +51,7 @@ if not df.empty:
     df['created_at'] = pd.to_datetime(df['created_at'], utc=True).dt.tz_convert('America/Punta_Arenas')
     
     # 2. Creamos una columna legible para mostrar (sin zona horaria)
-    df['Time'] = df['created_at'].dt.strftime('%d/%m %H:%M:%S')
+    df['hora formateada'] = df['created_at'].dt.strftime('%d/%m %H:%M:%S')
     
     df['consumo_kwh'] = (potencia_manta * (df['duty_cycle'].fillna(0)/100) * (10/3600)) / 1000
     df['costo_clp'] = df['consumo_kwh'] * costo_kwh
