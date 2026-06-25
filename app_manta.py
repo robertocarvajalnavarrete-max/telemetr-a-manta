@@ -71,7 +71,7 @@ if not df.empty:
     c1.metric("Temp. Agua", f"{df['temp_agua'].iloc[-1]:.1f}°C")
     c2.metric("Consumo Acumulado", f"{df['consumo_kwh'].sum():.2f} kWh")
     c3.metric("Costo Acumulado", f"${df['costo_clp'].sum():,.0f} CLP")
-    c4.metric("Potencia PID", f"{df['duty_cycle'].iloc[-1]}%")
+    c4.metric("Potencia PWM", f"{df['duty_cycle'].iloc[-1]}%")
     
     st.subheader("📊 Gráfico de Rendimiento")
     # Usamos 'hora_formateada' en el gráfico para asegurar la visualización horaria correcta
