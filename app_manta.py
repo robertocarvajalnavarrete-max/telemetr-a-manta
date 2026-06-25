@@ -65,7 +65,7 @@ if not df.empty:
     if es_flujo:
         st.warning("⚠️ ¡Flujo de agua detectado! Manta en reposo.")
     else:
-        st.success("✅ Agua estancada. Control térmico PID activo.")
+        st.success("✅ Sin flujo de agua. Control térmico activo.")
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Temp. Agua", f"{df['temp_agua'].iloc[-1]:.1f}°C")
