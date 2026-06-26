@@ -3,3 +3,4 @@ pandas
 supabase
 gpiozero
 xlsxwriter
+plotly
